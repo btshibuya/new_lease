@@ -66,7 +66,7 @@ export function validateContract(c, companies = []) {
     const m = measurementStart(c, lessee);
     ms = m.start;
     if (m.source !== 'none') {
-      req(L.model === 'jgaap', '適用初年度の累積的影響方式は日本基準モデルの借手のみ対応しています（IFRS・US GAAP の子会社は会社マスタで「適用済み」を選択）');
+      req(L.model !== 'asc842ol', '適用初年度の累積的影響方式は日本基準の借手のみ対応しています（IFRS・US GAAP の子会社は会社マスタで「適用済み」を選択）');
       req(Number.isFinite(m.rate) && m.rate >= 0 && m.rate < 1, '適用開始時の割引率が不正です');
     }
     if (m.source === 'contract') req(ms > s && ms < s + c.termMonths, '契約の適用開始年月はリース期間の途中である必要があります');
@@ -175,7 +175,8 @@ export function buildSchedule(c, pol = {}, opts = {}) {
     return p ? p.amount : 0;
   };
 
-  const rateFor = (k) => { let r = ms.rate; for (let i = 0; i < k; i++) if (mods[i].rate !== null && mods[i].rate !== undefined) r = mods[i].rate; return r; };
+  // 測定開始（適用開始）以前の条件変更の割引率は使わない（適用時の割引率で測定する）
+  const rateFor = (k) => { let r = ms.rate; for (let i = 0; i < k; i++) if (mods[i].rate !== null && mods[i].rate !== undefined && modStarts[i] > measStart) r = mods[i].rate; return r; };
   const rpOf = (rate) => (nominal ? (rate * f) / 12 : Math.pow(1 + rate, f / 12) - 1);
   const segFactorOf = (rp) => (len) => (nominal ? (rp * len) / f : Math.pow(1 + rp, len / f) - 1);
 
@@ -269,6 +270,7 @@ export function buildSchedule(c, pol = {}, opts = {}) {
   let prevL = 0, prevCost = 0, prevAcc = 0, prevIdcAcc = 0, prevX = 0, prevR = 0;
   let prevLessorAcc = lessorAccAt(firstIdx - 1);
   let curPh = null, dep = dep0;
+  let idcDep = { base: 0, net: idc, from: measStart, months: dep0.months };
   // 費用（ASC842・簡便法）と貸手収益の区間
   let costSeg = null, incSeg = null;
   const sumPay = (plan, a, b) => plan.payments.filter((p) => p.month >= a && p.month <= b).reduce((x, p) => x + p.amount, 0);
@@ -314,7 +316,10 @@ export function buildSchedule(c, pol = {}, opts = {}) {
           cost += dL;
           le.remeasure = { ym: indexToYm(m), Lold: prevL, Lnew: ph.L0, dL, costOut, accOut, Lpart, gain, rate: ph.rate };
           prevL = ph.L0; prevCost = cost; prevAcc = acc;
-          if (L.model === 'jgaap') dep = { accBase: acc, net: cost - acc, from: m, months: newEnd - m + 1 };
+          if (L.model === 'jgaap') {
+            dep = { accBase: acc, net: cost - acc, from: m, months: newEnd - m + 1 };
+            if (idc) idcDep = { base: prevIdcAcc, net: idc - prevIdcAcc, from: m, months: newEnd - m + 1 };
+          }
           if (L.model === 'asc842ol') costSeg = { start: m, months: newEnd - m + 1, total: sumPay(ph.plan, m, newEnd) + (prevCost - prevL), prevCum: 0 };
         }
         curPh = ph;
@@ -329,7 +334,7 @@ export function buildSchedule(c, pol = {}, opts = {}) {
         le.dep = acc - prevAcc;
         le.acc_end = acc;
         le.cost_end = prevCost;
-        const idcAcc = idc > 0 ? R((idc * Math.min(m - measStart + 1, dep0.months)) / dep0.months) : 0;
+        const idcAcc = idc > 0 ? idcDep.base + R((idcDep.net * Math.min(m - idcDep.from + 1, idcDep.months)) / idcDep.months) : 0;
         le.idcDep = idcAcc - prevIdcAcc;
         le.idcAcc_end = idcAcc;
         prevIdcAcc = idcAcc;
@@ -422,7 +427,8 @@ export function currentPortion(sched, endIdx) {
   if (!Lend) return 0;
   const within = phaseAtIndex(sched, endIdx).segs.filter((sg) => sg.pay.month > endIdx && sg.pay.month <= endIdx + 12);
   if (!within.length) return 0;
-  return Lend - within[within.length - 1].after;
+  // 1年以内の支払が0（フリーレント等）の場合に利息の増加で負にならないよう、0〜期末残高の範囲に収める
+  return Math.min(Lend, Math.max(0, Lend - within[within.length - 1].after));
 }
 
 /** 期間 [startIdx, endIdx] の合計値と期首・期末残高 */

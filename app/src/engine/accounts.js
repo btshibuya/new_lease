@@ -73,6 +73,9 @@ export function accountLabel(line, policies = {}, names = {}) {
   // ユーザー別の科目名：「キー.区分」（例 DEP_ROU.mfg、LEASE_INC.sales）→「キー」の順に優先
   const variant = { DEP_ROU: m.lesseeDept, DEP_RECLASS: m.lesseeDept, LEASE_INC: m.lessorIncClass, RENTAL_DEP: m.lessorDepClass, RECLASS_ASSET: m.assetClass, RECLASS_ACC: m.assetClass, ROU_COST: m.assetClass, ROU_ACC: m.assetClass }[line.acc];
   if (variant && names[`${line.acc}.${variant}`]) return names[`${line.acc}.${variant}`];
+  // 区分を持つ科目は、名称だけを上書きした場合も区分を付記して別の行に集計する（区分の異なる金額の合算を防ぐ）
+  const variantLabel = { DEP_ROU: LESSEE_DEPT[m.lesseeDept], DEP_RECLASS: LESSEE_DEPT[m.lesseeDept], LEASE_INC: LESSOR_INC_CLASS[m.lessorIncClass], RENTAL_DEP: LESSOR_DEP_CLASS[m.lessorDepClass], RECLASS_ASSET: ASSET_CLASSES[m.assetClass], RECLASS_ACC: ASSET_CLASSES[m.assetClass] }[line.acc];
+  if (names[line.acc] && variantLabel) return `${names[line.acc]}（${variantLabel}）`;
   if (names[line.acc] && !(line.acc === 'ROU_COST' || line.acc === 'ROU_ACC')) return names[line.acc];
   const base = names[line.acc] || ACCOUNTS[line.acc]?.name || line.acc;
   const cls = ASSET_CLASSES[m.assetClass] || '';

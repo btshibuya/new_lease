@@ -1,6 +1,7 @@
 // 連結精算表・連結CF消去データ・満期分析（共通部品）
 import { accountLabel, ACCOUNTS, metaOf } from './accounts.js';
 import { round } from './util.js';
+import { phaseAtIndex } from './schedule.js';
 
 /**
  * 個別財務諸表上のグループ内リース関連残高（アプリの計算値）。借方＋。
@@ -153,14 +154,14 @@ export function maturity(gen, period) {
     const endRec = sched.byIndex(period.end);
     if (!endRec || !endRec.lessee.active || endRec.lessee.term) continue;
     let prevAfter = endRec.lessee.L_end;
-    const ph = sched.meta.phases.reduce((a, x) => (x.start <= period.end ? x : a), sched.meta.phases[0]);
+    const ph = phaseAtIndex(sched, period.end);
     for (const sg of ph.segs) {
       const p = sg.pay;
       if (p.month <= period.end) continue; // 流動区分（currentPortion）と同じく、決算日時点の契約上の支払予定で区分する
       const d = p.month - period.end;
       const b = vals.find((x) => d >= x.from && d <= x.to);
       // 元本ベース：その支払で減少する残高（期末残高からの減少分）
-      const principal = prevAfter - sg.after;
+      const principal = Math.max(0, prevAfter - sg.after);
       prevAfter = sg.after;
       if (b) { b.amount += p.amount; b.principal += principal; }
     }
@@ -198,6 +199,7 @@ export function contractYearly(sched, periods, currentPortionFn) {
     const sum = (f) => inP.reduce((a, x) => a + (f(x) || 0), 0);
     const openL = lb ? lb.lessee.L_end || 0 : 0;
     const newL = inP.find((x) => x.lessee.commence)?.lessee.commence.L0 || 0;
+    const remL = inP.reduce((a, x) => a + (x.lessee.remeasure ? x.lessee.remeasure.Lnew - x.lessee.remeasure.Lold : 0), 0);
     const int = sum((x) => x.lessee.int) + sum((x) => x.lessee.accr);
     const pay = sum((x) => x.lessee.pay);
     const term = inP.find((x) => x.lessee.term)?.lessee.term;
@@ -208,7 +210,7 @@ export function contractYearly(sched, periods, currentPortionFn) {
     const inc = sum((x) => x.lessor.inc);
     const cumE = closeL + (le.lessee.X_end || 0) - rouNet - (le.lessor.R_end || 0);
     rows.push({
-      label: p.label, start: p.start, end: p.end, openL, newL, pay, int, principal: pay - int, closeL,
+      label: p.label, start: p.start, end: p.end, openL, newL, remL, pay, int, principal: pay - int, closeL,
       cur: currentPortionFn ? currentPortionFn(sched, p.end) : 0,
       rouNet, dep, lesseeExp, inc, diff: lesseeExp - inc, cumE, termGain: term ? term.gain : 0,
       idc: inP.find((x) => x.lessee.commence)?.lessee.commence.idc || 0,

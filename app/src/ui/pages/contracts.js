@@ -82,6 +82,7 @@ function renderDetail(c, ctx) {
       { label: '年度', key: 'label' },
       { label: '期首負債', key: 'openL', num: true },
       { label: '新規', key: 'newL', num: true },
+      { label: '再測定', key: 'remL', num: true, title: '条件変更による再測定（範囲縮小の取崩を含む）' },
       { label: '支払', key: 'pay', num: true },
       { label: '利息', key: 'int', num: true },
       { label: '元本', key: 'principal', num: true },
@@ -103,7 +104,7 @@ function renderDetail(c, ctx) {
       { label: '使用権資産簿価', num: true, render: (x) => (x.lessee.cost_end || 0) - (x.lessee.acc_end || 0) },
       { label: '受取リース料', num: true, render: (x) => x.lessor.inc },
       { label: '貸手の未収', num: true, render: (x) => x.lessor.R_end },
-      { label: 'イベント', render: (x) => (x.lessee.commence ? '開始' : '') + (x.lessee.term ? (x.lessee.term.kind === 'termination' ? '中途解約' : '満了') : '') },
+      { label: 'イベント', render: (x) => [x.lessee.commence ? (sc.meta.measSource !== 'none' ? '適用開始（経過措置）' : '開始') : '', x.lessee.remeasure ? `条件変更（負債 ${fmt(x.lessee.remeasure.Lold)}→${fmt(x.lessee.remeasure.Lnew)}）` : '', x.lessee.term ? (x.lessee.term.kind === 'termination' ? '中途解約' : '満了') : ''].filter(Boolean).join('・') },
     ], sc.months, { className: 'compact' }))));
     parts.push(actualsCard(c, sc, ctx.periods));
   }
@@ -206,7 +207,8 @@ function editor(c, data) {
       field('当初リース負債の取込値（空欄＝再計算）', num(f.lessee, 'liabilityOverride', { nullable: true }), '借手の帳簿値。再計算値との差は検算で表示'),
       field('適用開始前に開始した契約の使用権資産の測定', sel(f.lessee, 'rouTransition', [['eq_liability', 'リース負債と同額'], ['retrospective', 'リース開始時から適用していたとみなして測定']]), '借手会社の適用初年度の方法が「累積的影響方式」の場合に使用'),
       field('適用開始時の割引率（年％、空欄＝上の割引率）', h('input', { type: 'number', step: 'any', value: f.lessee.transitionRate === null || f.lessee.transitionRate === undefined ? '' : +(f.lessee.transitionRate * 100).toFixed(6), on: { input: (e) => { f.lessee.transitionRate = e.target.value === '' ? null : Number(e.target.value) / 100; } } })),
-      f.lessee.transition?.method === 'cumulative' ? field('（旧形式）契約単位の適用開始年月', month(f.lessee.transition, 'ym'), '旧版で入力した契約単位の設定。会社マスタの設定より優先されます') : null,
+      c.lessee.transition?.method === 'cumulative' ? field('（旧形式）契約単位の適用初年度', sel(f.lessee.transition, 'method', [['cumulative', '契約単位の設定を使う（会社マスタより優先）'], ['none', '使わない（会社マスタの設定に従う）']]), '旧版で入力した契約単位の設定。解除すると会社マスタの適用初年度の方法に従います') : null,
+      c.lessee.transition?.method === 'cumulative' ? field('（旧形式）契約単位の適用開始年月', month(f.lessee.transition, 'ym')) : null,
       field('法人税法上のリース取引（売買扱い）', h('input', { type: 'checkbox', checked: !!f.lessee.taxLease, on: { change: (e) => { f.lessee.taxLease = e.target.checked; } } }), '該当する場合、税効果は個別検討（検算で注意喚起）'))),
     modsFieldset(f),
     h('fieldset', null, h('legend', null, '貸手の情報（オペレーティング・リース）'), grid(

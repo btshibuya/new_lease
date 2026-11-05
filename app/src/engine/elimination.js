@@ -91,13 +91,13 @@ export function monthReversals(rec, sched, pol) {
     out.push({ tpl: 'C-04', lines: [
       ln('LL_NC', lesseeCo, le.accr, meta, 'リース負債の利息相当の増加（ASC842 オペレーティング・リース）'),
       ln('ROU_COST', lesseeCo, le.cost - le.accr, meta, '使用権資産の償却（単一リース費用−利息相当）'),
-      ln('ASC_COST', lesseeCo, -le.cost, meta, `単一リース費用（定額）＝総リース料 ${fmt(sched.meta.totalPayments)} ÷ ${sched.meta.N}か月`),
+      ln('ASC_COST', lesseeCo, -le.cost, meta, '単一リース費用（定額：区間内のリース料総額 ÷ 区間の月数。条件変更後は変更日からの残存期間で再計算）'),
     ], note: `${when} 単一リース費用の取消` });
   }
   if (model === 'offbalance' && le.active && le.cost) {
     out.push({ tpl: 'C-04', lines: [
       ln('LEASE_ACCRUED', lesseeCo, le.cost, meta, '未払リース料の計上の取消'),
-      ln('SHORT_COST', lesseeCo, -le.cost, meta, `リース費用（定額）＝総リース料 ${fmt(sched.meta.totalPayments)} ÷ ${sched.meta.N}か月（短期・少額等の簡便法）`),
+      ln('SHORT_COST', lesseeCo, -le.cost, meta, 'リース費用（定額：区間内のリース料総額 ÷ 区間の月数。短期・少額等の簡便法）'),
     ], note: `${when} リース費用の取消` });
   }
 
@@ -136,7 +136,7 @@ export function monthReversals(rec, sched, pol) {
   }
   if (lo.inc) {
     out.push({ tpl: 'C-04', lines: [
-      ln('LEASE_INC', lessorCo, lo.inc, meta, lo.termAdj ? `受取リース料（定額）${fmt(lo.inc - lo.termAdj)}、解約に伴う未収の取崩 ${fmt(lo.termAdj)}` : `受取リース料（定額）＝総リース料 ${fmt(sched.meta.totalPayments)} ÷ ${sched.meta.N}か月`),
+      ln('LEASE_INC', lessorCo, lo.inc, meta, lo.termAdj ? `受取リース料（定額）${fmt(lo.inc - lo.termAdj)}、解約に伴う未収の取崩 ${fmt(lo.termAdj)}` : '受取リース料（定額法：収益認識区間のリース料総額 ÷ 区間の月数。区間は開始・条件変更（新たなリース）・貸手のリース期間の終了で区切る）'),
       ln('ACCR_INC', lessorCo, -lo.inc, meta, '貸手の収益計上（未収リース料）の取消'),
     ], note: `${when} 受取リース料の取消` });
   }
@@ -320,11 +320,18 @@ export function contractJournals(c, period, ctx) {
   for (const l of inPeriod) (byTpl[l.tpl] ||= []).push(l);
   const taxLines = [];
   const nciLines = [];
+  // 適用初年度に借手が期首利益剰余金で処理した累積的影響額（遡及測定）：その税効果・非支配株主持分も期首利益剰余金で処理する
+  const trans = inPeriod.filter((l) => l.tpl === 'C-02' && l.acc === 'RE_OPEN').reduce((a, l) => a + l.amt, 0);
+  const transE = -trans; // 借手の純資産修正額のうち累積的影響額の取消分
+  const transDT = transE ? taxOf(coMap[c.lesseeCo], transE, sched.meta.measStart, pol, R) : 0;
+  const transN = transE && pol['POL-01'] === 'allocate' ? R((transE - transDT) * rateAt(coMap[c.lesseeCo], sched.meta.measStart, 'nciRatio')) : 0;
   for (const co of cos) {
     const dDT = res.DTc[co] - res.DTo[co];
     if (dDT) {
       const rateNote = res.tO[co] !== res.tC[co] ? `（税率変更 ${pct(res.tO[co])}→${pct(res.tC[co])} の影響を含む）` : '';
-      taxLines.push(ln('TAX_ADJ', co, dDT, meta, `当期の増減＝期末 ${fmt(res.Eclose[co])}×${pct(res.tC[co])}＝${fmt(res.DTc[co])} − 期首 ${fmt(res.DTo[co])}${rateNote}（${nm(co)}）`));
+      const tr = co === c.lesseeCo ? transDT : 0;
+      if (dDT - tr) taxLines.push(ln('TAX_ADJ', co, dDT - tr, meta, `当期の増減＝期末 ${fmt(res.Eclose[co])}×${pct(res.tC[co])}＝${fmt(res.DTc[co])} − 期首 ${fmt(res.DTo[co])}${tr ? ` − 適用時の累積的影響額分 ${fmt(tr)}` : ''}${rateNote}（${nm(co)}）`));
+      if (tr) taxLines.push(ln('RE_OPEN', co, tr, meta, `適用時の累積的影響額 ${fmt(transE)} に係る税効果（期首利益剰余金で処理）`));
       taxLines.push(ln('DTA', co, -dDT, meta, `${nm(co)} の繰延税金資産（負債）`));
     }
   }
@@ -332,7 +339,11 @@ export function contractJournals(c, period, ctx) {
     const co = c.lesseeCo;
     const dN = res.Nclose[co] - res.Nopen[co];
     const capPart = capClose - capOpen;
-    const plPart = dN - capPart;
+    const plPart = dN - capPart - transN;
+    if (transN) {
+      nciLines.push(ln('RE_OPEN', co, transN, meta, `適用時の累積的影響額（税効果後）× 借手の非支配株主持分比率（期首利益剰余金で処理）`));
+      nciLines.push(ln('NCI', co, -transN, meta, `${nm(co)} の非支配株主持分（適用時）`));
+    }
     if (plPart) {
       nciLines.push(ln('NCI_PL', co, plPart, meta, `当期の非支配株主帰属額＝期末 ${fmt(res.Nclose[co])} − 期首 ${fmt(res.Nopen[co])} − 持分変動 ${fmt(capPart)}（基礎＝借手・貸手の税効果後修正額の合計、比率＝借手 ${pct(res.nO[co])}→${pct(res.nC[co])}）`));
       nciLines.push(ln('NCI', co, -plPart, meta, `${nm(co)} の非支配株主持分`));

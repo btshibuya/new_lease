@@ -97,7 +97,7 @@ test('非支配株主持分の按分：基礎＝借手・貸手の税効果後�
 });
 
 test('借手簡便法・フリーレントでは連結全体の影響0のため、非支配株主持分も0', () => {
-  const c = { ...JSON.parse(JSON.stringify(data.contracts.find((x) => x.id === 'K-003'))), id: 'OB', lessorCo: 'P', lesseeCo: 'S2', freePayments: 6, termMonths: 12 };
+  const c = { ...JSON.parse(JSON.stringify(data.contracts.find((x) => x.id === 'K-003'))), id: 'OB', lessorCo: 'P', lesseeCo: 'S2', commencement: '2028-04', freePayments: 6, termMonths: 12 };
   for (const p of [...FY, ...buildPeriods(ymToIndex('2027-04'), ymToIndex('2029-03'), 3, 'quarter')]) {
     const r = generateAll({ ...data, contracts: [c] }, p, pol).results[0];
     assert.equal(r.NCI.close.S2, 0, p.label);

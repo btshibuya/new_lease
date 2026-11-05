@@ -6,7 +6,7 @@ export function sampleData() {
     companies: [
       { code: 'P', name: '親会社P', isParent: true, fyeMonth: 3, taxRate: 0.3, nciRatio: 0, taxEffect: true, currency: 'JPY', adoption: { method: 'cumulative', ym: '2027-04' } },
       { code: 'S1', name: '子会社S1（100%）', fyeMonth: 3, taxRate: 0.3, nciRatio: 0, taxEffect: true, currency: 'JPY', adoption: { method: 'cumulative', ym: '2027-04' } },
-      { code: 'S2', name: '子会社S2（60%・12月決算）', fyeMonth: 12, taxRate: 0.3, nciRatio: 0.4, taxEffect: true, legacyAccounts: true, splitsCurrent: false, currency: 'JPY', adoption: { method: 'cumulative', ym: '2027-04' }, history: [{ fromYm: '2030-04', taxRate: 0.31, nciRatio: 0.4 }] },
+      { code: 'S2', name: '子会社S2（60%・12月決算）', fyeMonth: 12, taxRate: 0.3, nciRatio: 0.4, taxEffect: true, legacyAccounts: true, splitsCurrent: false, currency: 'JPY', adoption: { method: 'cumulative', ym: '2028-01' }, history: [{ fromYm: '2030-04', taxRate: 0.31, nciRatio: 0.4 }] },
       { code: 'S3', name: '在外子会社S3（80%・US GAAP）', fyeMonth: 3, taxRate: 0.27, nciRatio: 0.2, taxEffect: true, currency: 'JPY', adoption: { method: 'applied', ym: '2019-04' } },
     ],
     contracts: [

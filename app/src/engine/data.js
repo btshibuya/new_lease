@@ -74,7 +74,8 @@ export function sanitizeCompany(c) {
     splitsCurrent: c.splitsCurrent === false ? false : true,
     currency: str(c.currency || 'JPY', 3),
     dtaRatio: num(c.dtaRatio ?? 1, 1, { min: 0, max: 1 }),
-    adoption: { method: oneOf(ad.method, ['cumulative', 'retrospective', 'applied'], 'cumulative'), ym: ym(ad.ym) || '2027-04' },
+    // 適用初年度の設定がない旧版のデータは、旧版と同じ結果になる「リース開始時から測定」（完全遡及）で読み込む
+    adoption: { method: oneOf(ad.method, ['cumulative', 'retrospective', 'applied'], c.adoption ? 'cumulative' : 'retrospective'), ym: ym(ad.ym) || '2027-04' },
     history: sanitizeHistory(c.history, { taxRate, nciRatio }),
   };
 }
@@ -154,13 +155,15 @@ export function sanitizeData(raw) {
   const rename = new Map();
   for (const c of companies) {
     let code = c.code;
-    if (!code || RESERVED.has(code) || codes.has(code)) {
+    const invalid = !validCode(code);
+    if (invalid || codes.has(code)) {
       let n = 1;
-      const baseCode = (code && !RESERVED.has(code) ? code : 'CO').slice(0, 16);
+      const baseCode = (code && validCode(code) ? code : String(code || 'CO').replace(/[\u0000-\u001f\u007f|]/g, '').replace(/^(__proto__|prototype|constructor)$/, 'CO') || 'CO').slice(0, 16);
       while (codes.has(`${baseCode}_${n}`)) n++;
       const nc = `${baseCode}_${n}`;
-      warnings.push(`会社コード「${code}」は${!code ? '空' : RESERVED.has(code) ? '予約語' : '重複'}のため「${nc}」に付け替えました`);
-      if (code && !rename.has(code)) rename.set(code, nc);
+      warnings.push(`会社コード「${code}」は${!code ? '空' : invalid ? '使用できない文字・予約語を含む' : '重複'}のため「${nc}」に付け替えました${invalid ? '' : '（契約は先に登録された会社を参照したままです）'}`);
+      // 重複の場合、契約の参照は最初の会社のまま（付け替えた側は契約のない会社として残す）
+      if (invalid && code && !rename.has(code)) rename.set(code, nc);
       c.code = nc;
     }
     codes.add(c.code);
@@ -199,6 +202,8 @@ export function sanitizeData(raw) {
   const kept = rawLog.slice(-MAX_LOG).map((e) => ({ at: str(e?.at, 40), action: str(e?.action, 60), detail: str(e?.detail, 500), prev: str(e?.prev, 32), hash: str(e?.hash, 32) }));
   const auditLog = kept;
   const auditAnchor = rawLog.length > MAX_LOG ? kept[0]?.prev || '' : str(raw.auditAnchor || '', 32);
+  const importedLogs = Array.isArray(raw.importedLogs) ? raw.importedLogs.slice(0, 50).map((x) => ({ file: str(x?.file, 120), at: str(x?.at, 40), anchor: str(x?.anchor, 32), log: Array.isArray(x?.log) ? x.log.slice(-MAX_LOG).map((e) => ({ at: str(e?.at, 40), action: str(e?.action, 60), detail: str(e?.detail, 500), prev: str(e?.prev, 32), hash: str(e?.hash, 32) })) : [] })) : [];
+  if (raw.companies && Array.isArray(raw.companies) && raw.companies.some((c) => c && typeof c === 'object' && !c.adoption)) warnings.push('適用初年度の方法が未設定の会社は「完全遡及（リース開始時から測定）」として読み込みました。会社マスタで確認してください');
   const manualJournals = Array.isArray(raw.manualJournals) ? raw.manualJournals.slice(0, 2000).map(sanitizeManual).filter(Boolean) : [];
   const locks = Array.isArray(raw.locks) ? raw.locks.slice(0, 500).map(sanitizeLock).filter(Boolean) : [];
   const checkNotes = {};
@@ -217,6 +222,7 @@ export function sanitizeData(raw) {
       checkNotes,
       auditLog,
       auditAnchor,
+      importedLogs,
     },
     warnings,
   };
@@ -250,7 +256,7 @@ export function sanitizeLock(l) {
       snap[str(cid, 30)] = { nets };
     }
   }
-  return { periodStart: start, periodEnd: end, label: str(l.label, 60), lockedAt: str(l.lockedAt, 40), policiesHash: str(l.policiesHash, 40), policies: l.policies && typeof l.policies === 'object' ? Object.fromEntries(Object.entries(l.policies).filter(([k]) => /^POL-\d{2}$/.test(k)).map(([k, v]) => [k, str(v, 30)])) : null, snapshot: snap };
+  return { periodStart: start, periodEnd: end, label: str(l.label, 60), lockedAt: str(l.lockedAt, 40), policiesHash: str(l.policiesHash, 40), snapHash: str(l.snapHash, 32), imported: l.imported === true, policies: l.policies && typeof l.policies === 'object' ? Object.fromEntries(Object.entries(l.policies).filter(([k]) => /^POL-\d{2}$/.test(k)).map(([k, v]) => [k, str(v, 30)])) : null, snapshot: snap };
 }
 
 /** CSV セルの無害化（数式インジェクション対策：NFR-011） */

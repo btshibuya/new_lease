@@ -31,6 +31,12 @@ const MUTATIONS = [
   ['貸手資産の償却開始を1か月遅らせる', 'schedule.js', 'const k = Math.min(Math.max(m - aStart + 1, 0), r.assetLifeMonths);', 'const k = Math.min(Math.max(m - aStart, 0), r.assetLifeMonths);'],
   ['CF消去で利息を元本に含める', 'reports.js', 'if (x.m >= period.start && p) { interestPaid += ip; repay += p - ip; }', 'if (x.m >= period.start && p) { interestPaid += 0; repay += p; }'],
   ['条件変更の再測定額を使用権資産に反映しない', 'schedule.js', '          cost += dL;\n', ''],
+  ['範囲縮小の取崩割合を誤る', 'schedule.js', 'const keep = (newEnd - m + 1) / (oldEnd - m + 1);', 'const keep = (newEnd - m + 2) / (oldEnd - m + 1);'],
+  ['範囲縮小で減価償却累計額を取り崩さない', 'schedule.js', 'accOut = R(acc * (1 - keep));', 'accOut = 0;'],
+  ['条件変更後の償却月数を1か月長くする', 'schedule.js', 'dep = { accBase: acc, net: cost - acc, from: m, months: newEnd - m + 1 };', 'dep = { accBase: acc, net: cost - acc, from: m, months: newEnd - m + 2 };'],
+  ['条件変更後も変更前の割引率を使う', 'schedule.js', '&& modStarts[i] > measStart) r = mods[i].rate;', '&& modStarts[i] > measStart) r = r;'],
+  ['遡及測定に契約時の割引率を使う', 'schedule.js', 'const seg = segFactorOf(rpOf(ms.rate));', 'const seg = segFactorOf(rpOf(L.rate));'],
+  ['ASC842の条件変更後の費用から前払・未払を除く', 'schedule.js', 'total: sumPay(ph.plan, m, newEnd) + (prevCost - prevL), prevCum: 0 };', 'total: sumPay(ph.plan, m, newEnd), prevCum: 0 };'],
   ['貸手の条件変更後の未収を新たなリース料から控除しない', 'schedule.js', "incSeg = { start: m, end: endPlanned, total: sumPay(plan, m, endPlanned) - (m === s ? 0 : prevR), prevCum: 0 };", "incSeg = { start: m, end: endPlanned, total: sumPay(plan, m, endPlanned), prevCum: 0 };"],
 ];
 
@@ -45,6 +51,11 @@ async function ngIds(dir) {
   // 旧科目＋流動区分あり・税率/持分比率の変更がある会社も加えて検査範囲を広げる
   d.companies.push({ code: 'S4', name: 'S4', fyeMonth: 3, taxRate: 0.3, nciRatio: 0.3, taxEffect: true, legacyAccounts: true, splitsCurrent: true, history: [{ fromYm: '2029-04', taxRate: 0.32, nciRatio: 0.2 }] });
   d.contracts.push({ ...JSON.parse(JSON.stringify(d.contracts[0])), id: 'K-901', lesseeCo: 'S4', actuals: {}, lessor: { ...d.contracts[0].lessor, assetId: 'A-09' } });
+  // 範囲縮小（期間短縮）、遡及測定（適用時の割引率が契約時と異なる）、ASC842 の条件変更
+  d.companies.push({ code: 'S5', name: 'S5', fyeMonth: 3, taxRate: 0.3, nciRatio: 0, taxEffect: true, adoption: { method: 'cumulative', ym: '2027-04' } });
+  d.contracts.push({ ...JSON.parse(JSON.stringify(d.contracts[0])), id: 'K-903', lesseeCo: 'S4', modifications: [{ ym: '2029-04', payment: null, termMonths: 48, rate: null }], lessor: { ...d.contracts[0].lessor, assetId: 'A-11' }, actuals: {} });
+  d.contracts.push({ ...JSON.parse(JSON.stringify(d.contracts[0])), id: 'K-904', lesseeCo: 'S5', commencement: '2025-04', termMonths: 96, lessee: { ...d.contracts[0].lessee, rate: 0.04, rouTransition: 'retrospective', transitionRate: 0.025 }, lessor: { ...d.contracts[0].lessor, assetId: 'A-12', assetStart: '2025-04' }, actuals: {} });
+  d.contracts.push({ ...JSON.parse(JSON.stringify(d.contracts[3])), id: 'K-905', modifications: [{ ym: '2028-08', payment: 360, termMonths: 60, rate: 0.05 }], lessor: { ...d.contracts[3].lessor, assetId: 'A-13' }, actuals: {} });
   // フリーレント中に条件変更（貸手の未収が残った状態で新たなリースとして扱う）
   d.contracts.push({ ...JSON.parse(JSON.stringify(d.contracts[1])), id: 'K-902', lesseeCo: 'S4', freePayments: 4, steps: [], modifications: [{ ym: '2027-07', payment: 60, termMonths: 36, rate: 0.03 }], lessee: { ...d.contracts[1].lessee, idc: 0 }, lessor: { ...d.contracts[1].lessor, assetId: 'A-10', ratio: 1 }, actuals: {} });
   const periods = [...buildPeriods(ymToIndex('2027-04'), ymToIndex('2034-03'), 3), ...buildPeriods(ymToIndex('2027-04'), ymToIndex('2029-03'), 3, 'quarter')];

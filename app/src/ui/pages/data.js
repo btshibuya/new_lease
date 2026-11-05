@@ -54,5 +54,7 @@ export function renderData(ctx) {
     card('監査ログ（変更履歴）',
       h('p', null, '検証：', chain.ok ? statusBadge('ok', `改ざんなし（${data.auditLog.length}件の連鎖ハッシュが一致）`) : statusBadge('ng', `${chain.index + 1}件目以降で不一致（ログが編集された可能性）`)),
       h('p', { class: 'help' }, '各記録は直前の記録のハッシュ値を含みます。途中の記録の書換え・削除は検知できますが、末尾の削除や全体の作り直しは検知できない簡易的な仕組みです（暗号学的な保証ではありません）。操作者名は記録しません（端末内で使う前提のため）。'),
-      table([{ label: '日時', render: (e) => new Date(e.at).toLocaleString('ja-JP') }, { label: '操作', key: 'action' }, { label: '内容', key: 'detail' }, { label: 'ハッシュ', key: 'hash' }], [...data.auditLog].reverse().slice(0, 300), { className: 'compact' })));
+      table([{ label: '日時', render: (e) => new Date(e.at).toLocaleString('ja-JP') }, { label: '操作', key: 'action' }, { label: '内容', key: 'detail' }, { label: 'ハッシュ', key: 'hash' }], [...data.auditLog].reverse().slice(0, 300), { className: 'compact' })),
+    (data.importedLogs || []).length ? card('取込ファイルの監査ログ（別枠で保存）',
+      table([{ label: '取込元', key: 'file' }, { label: '取込日時', render: (x) => new Date(x.at).toLocaleString('ja-JP') }, { label: '件数', render: (x) => x.log.length }, { label: '連鎖の検証', render: (x) => h('td', null, verifyChain(x.log, x.anchor).ok ? statusBadge('ok', '一致') : statusBadge('ng', '不一致')) }], data.importedLogs, { className: 'compact' })) : null);
 }

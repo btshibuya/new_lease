@@ -58,7 +58,8 @@ function impactTable(def, ctx) {
     const g = generateAll(data, period, pol, needFresh ? {} : { schedCache: ctx.schedCache });
     const pre = g.results.reduce((a, r) => a + sum(r.E.close) - sum(r.E.open), 0);
     const tax = g.results.reduce((a, r) => a + sum(r.DT.close) - sum(r.DT.open), 0);
-    const nci = g.results.reduce((a, r) => a + sum(r.NCI.close) - sum(r.NCI.open), 0);
+    // 非支配株主に帰属する当期純利益は仕訳（NCI_PL）から集計（持分変動の資本剰余金分を含めない）
+    const nci = g.journals.flatMap((j) => j.lines).filter((l) => l.acc === 'NCI_PL').reduce((a, l) => a + l.amt, 0);
     const eq = g.results.reduce((a, r) => a + sum(r.E.close) - sum(r.DT.close), 0);
     // 連結損益計算書の区分別・連結貸借対照表の表示科目別の連結後金額（グループ内リース関連）
     const ws = worksheet(g, data.companies, pol, ctx.names, period);

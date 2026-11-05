@@ -96,7 +96,13 @@ export function resetSample() {
 export function replaceData(newData, label) {
   const log = state.data?.auditLog || [];
   const anchor = state.data?.auditAnchor || '';
+  const prevImported = state.data?.importedLogs || [];
+  // 取込ファイルの監査ログは破棄せず、別枠で保存して検証できるようにする
+  const imported = newData.auditLog && newData.auditLog.length ? [{ file: label, at: new Date().toISOString(), anchor: newData.auditAnchor || '', log: newData.auditLog }] : [];
   state.data = newData;
+  state.data.importedLogs = [...prevImported, ...(newData.importedLogs || []), ...imported].slice(-50);
+  // 取込ファイルの確定スナップショットは、この端末で確定したものではないため「取込（未検証）」とする
+  state.data.locks = (state.data.locks || []).map((l) => ({ ...l, imported: true }));
   state.data.auditLog = [...log];
   state.data.auditAnchor = anchor;
   appendLog(state.data.auditLog, 'データ取込', label);
@@ -115,8 +121,9 @@ export function snapshot() {
 export function lockPeriod(period, nets, policies) {
   const s = indexToYm(period.start), e = indexToYm(period.end);
   if ((state.data.locks || []).some((l) => l.periodStart === s && l.periodEnd === e)) return false;
-  state.data.locks = [...(state.data.locks || []), { periodStart: s, periodEnd: e, label: period.label, lockedAt: new Date().toISOString(), policiesHash: chainHash('', JSON.stringify(policies)), policies: { ...policies }, snapshot: nets }];
-  appendLog(state.data.auditLog, '期間確定', `${period.label}（契約 ${Object.keys(nets).length} 件のスナップショットを保存）`);
+  const snapHash = chainHash('', JSON.stringify(nets));
+  state.data.locks = [...(state.data.locks || []), { periodStart: s, periodEnd: e, label: period.label, lockedAt: new Date().toISOString(), policiesHash: chainHash('', JSON.stringify(policies)), policies: { ...policies }, snapHash, snapshot: nets }];
+  appendLog(state.data.auditLog, '期間確定', `${period.label}（契約・手入力仕訳 ${Object.keys(nets).length} 件のスナップショット、ハッシュ ${snapHash}）`);
   emit();
   return true;
 }
