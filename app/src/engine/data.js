@@ -29,35 +29,53 @@ function ym(v) {
   return /^\d{4}-(0[1-9]|1[0-2])$/.test(s) ? s : null;
 }
 
-const CODE_RE = /^[A-Za-z0-9_-]{1,20}$/;
-const RESERVED = new Set(['__proto__', 'prototype', 'constructor', 'CONSOL']);
+import { RESERVED_IDS } from './schedule.js';
+
+const CODE_RE = /^[^\u0000-\u001f\u007f|]{1,20}$/;
+const RESERVED = RESERVED_IDS;
+/** 会社コード：制御文字・区切り文字「|」を含まない1〜20文字で、予約語でないこと */
 export function validCode(code) {
-  return CODE_RE.test(code) && !RESERVED.has(code);
+  return typeof code === 'string' && CODE_RE.test(code) && !RESERVED.has(code);
 }
 
 /** 税率・非支配株主持分比率の履歴（適用開始年月つき） */
-function sanitizeHistory(h) {
+function sanitizeHistory(h, base) {
   if (!Array.isArray(h)) return [];
-  return h.slice(0, 100).filter((x) => x && typeof x === 'object' && ym(x.fromYm)).map((x) => ({
-    fromYm: ym(x.fromYm),
-    taxRate: num(x.taxRate, 0, { min: 0, max: 0.99 }),
-    nciRatio: num(x.nciRatio, 0, { min: 0, max: 1 }),
-  })).sort((a, b) => (a.fromYm < b.fromYm ? -1 : 1));
+  // 片方の率だけを変更する行は、もう一方を直前の率から引き継ぐ（未入力を0とみなさない）
+  const rows = h.slice(0, 100).filter((x) => x && typeof x === 'object' && ym(x.fromYm)).sort((a, b) => (ym(a.fromYm) < ym(b.fromYm) ? -1 : 1));
+  let prevT = base.taxRate, prevN = base.nciRatio;
+  const seen = new Set();
+  const out = [];
+  for (const x of rows) {
+    const f = ym(x.fromYm);
+    if (seen.has(f)) continue;
+    seen.add(f);
+    const t = x.taxRate === undefined || x.taxRate === null || x.taxRate === '' ? prevT : num(x.taxRate, prevT, { min: 0, max: 0.99 });
+    const n = x.nciRatio === undefined || x.nciRatio === null || x.nciRatio === '' ? prevN : num(x.nciRatio, prevN, { min: 0, max: 1 });
+    out.push({ fromYm: f, taxRate: t, nciRatio: n });
+    prevT = t; prevN = n;
+  }
+  return out;
 }
 
 export function sanitizeCompany(c) {
+  const taxRate = num(c.taxRate, 0, { min: 0, max: 0.99 });
+  const nciRatio = num(c.nciRatio, 0, { min: 0, max: 1 });
+  const ad = c.adoption && typeof c.adoption === 'object' ? c.adoption : {};
   return {
     code: str(c.code, 20),
     name: str(c.name, 100),
     isParent: bool(c.isParent),
     fyeMonth: int(c.fyeMonth, 3, { min: 1, max: 12 }),
-    taxRate: num(c.taxRate, 0, { min: 0, max: 0.99 }),
-    nciRatio: num(c.nciRatio, 0, { min: 0, max: 1 }),
+    taxRate,
+    nciRatio,
     taxEffect: c.taxEffect === false ? false : true,
     legacyAccounts: bool(c.legacyAccounts),
     splitsCurrent: c.splitsCurrent === false ? false : true,
     currency: str(c.currency || 'JPY', 3),
-    history: sanitizeHistory(c.history),
+    dtaRatio: num(c.dtaRatio ?? 1, 1, { min: 0, max: 1 }),
+    adoption: { method: oneOf(ad.method, ['cumulative', 'retrospective', 'applied'], 'cumulative'), ym: ym(ad.ym) || '2027-04' },
+    history: sanitizeHistory(c.history, { taxRate, nciRatio }),
   };
 }
 
@@ -70,7 +88,7 @@ export function sanitizeContract(c) {
     for (const [k, v] of Object.entries(c.actuals).slice(0, 200)) {
       if (!ym(k) || !v || typeof v !== 'object') continue;
       const a = {};
-      for (const f of ['L', 'rouNet', 'inc']) if (v[f] !== undefined && v[f] !== null && v[f] !== '') a[f] = num(v[f], 0);
+      for (const f of ['L', 'rouNet', 'inc', 'cur', 'R']) if (v[f] !== undefined && v[f] !== null && v[f] !== '') a[f] = num(v[f], 0);
       actuals[k] = a;
     }
   }
@@ -89,6 +107,13 @@ export function sanitizeContract(c) {
     steps: Array.isArray(c.steps) ? c.steps.slice(0, 50).map((s) => ({ fromPayment: int(s?.fromPayment, 1, { min: 1, max: 1200 }), amount: num(s?.amount, 0, { min: 0 }) })) : [],
     terminationYm: ym(c.terminationYm),
     terminationPenalty: num(c.terminationPenalty, 0, { min: 0 }),
+    modifications: Array.isArray(c.modifications) ? c.modifications.slice(0, 50).filter((m) => m && typeof m === 'object' && ym(m.ym)).map((m) => ({
+      ym: ym(m.ym),
+      payment: m.payment === null || m.payment === undefined || m.payment === '' ? null : num(m.payment, 0, { min: 0 }),
+      termMonths: m.termMonths === null || m.termMonths === undefined || m.termMonths === '' ? null : int(m.termMonths, 12, { min: 1, max: 1200 }),
+      rate: m.rate === null || m.rate === undefined || m.rate === '' ? null : num(m.rate, 0, { min: 0, max: 0.99 }),
+      note: str(m.note, 200),
+    })) : [],
     lessee: {
       model: oneOf(l.model, ['jgaap', 'asc842ol', 'offbalance'], 'jgaap'),
       rate: num(l.rate, 0, { min: 0, max: 0.99 }),
@@ -97,6 +122,9 @@ export function sanitizeContract(c) {
       liabilityOverride: l.liabilityOverride === null || l.liabilityOverride === undefined || l.liabilityOverride === '' ? null : num(l.liabilityOverride, 0, { min: 0 }),
       depMonths: l.depMonths === null || l.depMonths === undefined || l.depMonths === '' ? null : int(l.depMonths, 12, { min: 1, max: 1200 }),
       transition: t.method === 'cumulative' ? { method: 'cumulative', ym: ym(t.ym), rate: num(t.rate, 0, { min: 0, max: 0.99 }) } : { method: 'none' },
+      rouTransition: oneOf(l.rouTransition, ['eq_liability', 'retrospective'], 'eq_liability'),
+      transitionRate: l.transitionRate === null || l.transitionRate === undefined || l.transitionRate === '' ? null : num(l.transitionRate, 0, { min: 0, max: 0.99 }),
+      taxLease: bool(l.taxLease),
     },
     lessor: {
       assetId: str(r.assetId, 30),
@@ -106,6 +134,7 @@ export function sanitizeContract(c) {
       ratio: num(r.ratio, 1, { min: 0.0001, max: 1 }),
       incClass: oneOf(r.incClass, ['sales', 'nonop'], 'sales'),
       depClass: oneOf(r.depClass, ['cogs', 'nonop'], 'cogs'),
+      termMonths: r.termMonths === null || r.termMonths === undefined || r.termMonths === '' ? null : int(r.termMonths, 12, { min: 1, max: 1200 }),
     },
     actuals,
   };
@@ -120,22 +149,45 @@ export function sanitizeData(raw) {
   const companies = Array.isArray(raw.companies) ? raw.companies.slice(0, MAX_COMPANIES).filter((x) => x && typeof x === 'object').map(sanitizeCompany) : [];
   const contracts = Array.isArray(raw.contracts) ? raw.contracts.slice(0, MAX_CONTRACTS).filter((x) => x && typeof x === 'object').map(sanitizeContract) : [];
   if (Array.isArray(raw.contracts) && raw.contracts.length > MAX_CONTRACTS) warnings.push(`契約は最大${MAX_CONTRACTS}件までのため、超過分を読み込みませんでした`);
+  // 会社コード・契約番号の問題は読込を止めずに自動で付け替え、警告として知らせる（既存データを失わないため）
   const codes = new Set();
+  const rename = new Map();
   for (const c of companies) {
-    if (!validCode(c.code)) throw new Error(`会社コード「${c.code}」は使用できません（英数字・_・- の1〜20文字。予約語は不可）`);
-    if (codes.has(c.code)) throw new Error(`会社コード「${c.code}」が重複しています`);
+    let code = c.code;
+    if (!code || RESERVED.has(code) || codes.has(code)) {
+      let n = 1;
+      const baseCode = (code && !RESERVED.has(code) ? code : 'CO').slice(0, 16);
+      while (codes.has(`${baseCode}_${n}`)) n++;
+      const nc = `${baseCode}_${n}`;
+      warnings.push(`会社コード「${code}」は${!code ? '空' : RESERVED.has(code) ? '予約語' : '重複'}のため「${nc}」に付け替えました`);
+      if (code && !rename.has(code)) rename.set(code, nc);
+      c.code = nc;
+    }
     codes.add(c.code);
   }
   const ids = new Set();
   for (const c of contracts) {
-    if (!c.id) throw new Error('契約番号が空の契約があります');
-    if (ids.has(c.id)) throw new Error(`契約番号「${c.id}」が重複しています（重複したまま読み込むと別契約のスケジュールで仕訳が作られるため、読込を中止しました）`);
+    if (rename.has(c.lessorCo)) c.lessorCo = rename.get(c.lessorCo);
+    if (rename.has(c.lesseeCo)) c.lesseeCo = rename.get(c.lesseeCo);
+    if (!c.id || RESERVED_IDS.has(c.id) || ids.has(c.id)) {
+      let n = 2;
+      const baseId = (c.id && !RESERVED_IDS.has(c.id) ? c.id : 'K').slice(0, 24);
+      while (ids.has(`${baseId}-${n}`)) n++;
+      warnings.push(`契約番号「${c.id}」は${!c.id ? '空' : RESERVED_IDS.has(c.id) ? '予約語' : '重複'}のため「${baseId}-${n}」に付け替えました`);
+      c.id = `${baseId}-${n}`;
+    }
     ids.add(c.id);
   }
   const cfg = raw.config && typeof raw.config === 'object' ? raw.config : {};
   const accountNames = {};
   if (cfg.accountNames && typeof cfg.accountNames === 'object') {
-    for (const [k, v] of Object.entries(cfg.accountNames).slice(0, 200)) if (/^[A-Z_]{2,20}$/.test(k)) accountNames[k] = str(v, 60);
+    for (const [k, v] of Object.entries(cfg.accountNames).slice(0, 200)) if (/^[A-Z_]{2,20}(\.[a-z]{2,10})?$/.test(k)) accountNames[k] = str(v, 60);
+    // 旧版の科目キーからの移行
+    if (accountNames.LEASE_COST) {
+      for (const k of ['ASC_COST', 'SHORT_COST', 'PRE_RENT']) if (!accountNames[k]) accountNames[k] = accountNames.LEASE_COST;
+      delete accountNames.LEASE_COST;
+      warnings.push('旧版の科目「LEASE_COST」の名称を、ASC_COST・SHORT_COST・PRE_RENT に引き継ぎました');
+    }
   }
   const notes = {};
   if (raw.notes && typeof raw.notes === 'object') {
@@ -174,14 +226,14 @@ export function sanitizeData(raw) {
 export function sanitizeManual(m) {
   if (!m || typeof m !== 'object') return null;
   const lines = Array.isArray(m.lines) ? m.lines.slice(0, 50).map((l) => ({
-    acc: /^[A-Z_]{2,20}$/.test(l?.acc) ? l.acc : 'MANUAL',
+    acc: /^[A-Z_]{2,20}$/.test(l?.acc) && l.acc !== 'LEASE_COST' ? l.acc : 'MANUAL',
     label: str(l?.label, 60),
     co: str(l?.co, 20),
     amt: Math.round(num(l?.amt, 0)),
   })).filter((l) => l.amt !== 0) : [];
   const start = ym(m.periodStart), end = ym(m.periodEnd);
   if (!start || !end || !lines.length) return null;
-  return { id: str(m.id, 40), periodStart: start, periodEnd: end, contractId: str(m.contractId, 30), title: str(m.title, 100), reason: str(m.reason, 1000), evidence: str(m.evidence, 300), createdAt: str(m.createdAt, 40), lines };
+  return { id: str(m.id, 40), periodStart: start, periodEnd: end, kind: m.kind === 'IND' ? 'IND' : 'CON', carry: m.carry === 'carry' ? 'carry' : 'none', contractId: str(m.contractId, 30), title: str(m.title, 100), reason: str(m.reason, 1000), evidence: str(m.evidence, 300), createdAt: str(m.createdAt, 40), lines };
 }
 
 /** 期間確定（スナップショット） */
@@ -189,16 +241,16 @@ export function sanitizeLock(l) {
   if (!l || typeof l !== 'object') return null;
   const start = ym(l.periodStart), end = ym(l.periodEnd);
   if (!start || !end) return null;
-  const snap = {};
+  const snap = Object.create(null);
   if (l.snapshot && typeof l.snapshot === 'object') {
     for (const [cid, v] of Object.entries(l.snapshot).slice(0, 5000)) {
       if (!v || typeof v !== 'object') continue;
-      const nets = {};
-      if (v.nets && typeof v.nets === 'object') for (const [k, a] of Object.entries(v.nets).slice(0, 200)) if (/^[A-Z_]{2,20}\|[A-Za-z0-9_-]{1,20}$/.test(k)) nets[k] = Math.round(num(a, 0));
+      const nets = Object.create(null);
+      if (v.nets && typeof v.nets === 'object') for (const [k, a] of Object.entries(v.nets).slice(0, 500)) if (typeof k === 'string' && k.length <= 160 && !/[\u0000-\u001f]/.test(k)) nets[k] = Math.round(num(a, 0));
       snap[str(cid, 30)] = { nets };
     }
   }
-  return { periodStart: start, periodEnd: end, label: str(l.label, 60), lockedAt: str(l.lockedAt, 40), policiesHash: str(l.policiesHash, 40), snapshot: snap };
+  return { periodStart: start, periodEnd: end, label: str(l.label, 60), lockedAt: str(l.lockedAt, 40), policiesHash: str(l.policiesHash, 40), policies: l.policies && typeof l.policies === 'object' ? Object.fromEntries(Object.entries(l.policies).filter(([k]) => /^POL-\d{2}$/.test(k)).map(([k, v]) => [k, str(v, 30)])) : null, snapshot: snap };
 }
 
 /** CSV セルの無害化（数式インジェクション対策：NFR-011） */

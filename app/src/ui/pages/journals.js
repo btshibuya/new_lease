@@ -54,8 +54,8 @@ export function renderJournals(ctx) {
 /** 手入力仕訳（理由必須・監査ログ記録） */
 function manualCard(ctx) {
   const { data, period, companies } = ctx;
-  const draft = { title: '', contractId: '', kind: 'CON', reason: '', evidence: '', lines: [{ acc: 'MANUAL', label: '', co: 'CONSOL', dr: '', cr: '' }, { acc: 'MANUAL', label: '', co: 'CONSOL', dr: '', cr: '' }] };
-  const accOpts = [['MANUAL', '（科目名を入力）'], ...Object.entries(ACCOUNTS).filter(([k]) => k !== 'MANUAL').map(([k, v]) => [k, v.name])];
+  const draft = { title: '', contractId: '', kind: 'CON', carry: 'none', reason: '', evidence: '', lines: [{ acc: 'MANUAL_PL', label: '', co: 'CONSOL', dr: '', cr: '' }, { acc: 'MANUAL', label: '', co: 'CONSOL', dr: '', cr: '' }] };
+  const accOpts = [['MANUAL_PL', '（科目名を入力：損益計算書）'], ['MANUAL', '（科目名を入力：貸借対照表）'], ...Object.entries(ACCOUNTS).filter(([k]) => k !== 'MANUAL' && k !== 'MANUAL_PL').map(([k, v]) => [k, `${v.name}（${v.type === 'PL' ? '損益' : '貸借'}）`])];
   const coOpts = [['CONSOL', '連結'], ...companies.map((c) => [c.code, `${c.code} ${c.name}`])];
   const body = h('tbody');
   const bal = h('span', { class: 'muted' });
@@ -75,18 +75,19 @@ function manualCard(ctx) {
   drawRows();
   recalc();
   const save = () => {
-    const lines = draft.lines.map((l) => ({ acc: l.acc, label: l.acc === 'MANUAL' ? l.label.trim() : '', co: l.co, amt: Math.round((Number(l.dr) || 0) - (Number(l.cr) || 0)) })).filter((l) => l.amt);
+    const isFree = (a) => a === 'MANUAL' || a === 'MANUAL_PL';
+    const lines = draft.lines.map((l) => ({ acc: l.acc, label: isFree(l.acc) ? l.label.trim() : '', co: l.co, amt: Math.round((Number(l.dr) || 0) - (Number(l.cr) || 0)) })).filter((l) => l.amt);
     const total = lines.reduce((a, l) => a + l.amt, 0);
     if (!draft.reason.trim()) return toast('理由は必須です', 'error');
     if (lines.length < 2 || total !== 0) return toast('借方と貸方の合計が一致していません', 'error');
-    if (lines.some((l) => l.acc === 'MANUAL' && !l.label)) return toast('手入力科目の科目名を入力してください', 'error');
-    const m = sanitizeManual({ id: `M-${Date.now()}`, periodStart: indexToYm(period.start), periodEnd: indexToYm(period.end), contractId: draft.contractId, title: draft.title || '手入力仕訳', reason: draft.reason, evidence: draft.evidence, createdAt: new Date().toISOString(), lines });
+    if (lines.some((l) => isFree(l.acc) && !l.label)) return toast('手入力科目の科目名を入力してください', 'error');
+    const m = sanitizeManual({ id: `M-${Date.now()}`, periodStart: indexToYm(period.start), periodEnd: indexToYm(period.end), kind: draft.kind, carry: draft.carry, contractId: draft.contractId, title: draft.title || '手入力仕訳', reason: draft.reason, evidence: draft.evidence, createdAt: new Date().toISOString(), lines });
     update((d) => { d.manualJournals = [...(d.manualJournals || []), m]; }, '手入力仕訳追加', `${period.label} ${m.title}：${m.reason}`);
     toast('手入力仕訳を追加しました');
   };
-  const existing = (data.manualJournals || []).filter((m) => m.periodStart === indexToYm(period.start) && m.periodEnd === indexToYm(period.end));
+  const existing = (data.manualJournals || []).filter((m) => m.periodStart >= indexToYm(period.start) && m.periodEnd <= indexToYm(period.end));
   return card('手入力仕訳（理由必須・監査ログに記録）',
-    h('p', { class: 'help' }, '自動作成の対象外の調整（棚卸資産に含まれる償却費、変動リース料・非リース構成部分、決算日差異の調整など）を入力します。選択中の期間に計上され、精算表・検算・期間確定の対象になります。'),
+    h('p', { class: 'help' }, '自動作成の対象外の調整（棚卸資産に含まれる償却費、変動リース料・非リース構成部分、決算日差異の調整など）を入力します。選択中の期間に計上され、精算表・期間確定の対象になります。年度の表示には、その年度内の四半期に入力した仕訳も含まれます。手入力仕訳には税効果・非支配株主持分の按分は自動計算されないため、必要なら別の行で入力してください。'),
     existing.length ? h('ul', null, existing.map((m) => h('li', null, `${m.title}（${m.reason}）`, ' ', h('button', { class: 'btn-link danger', type: 'button', on: { click: () => {
       const why = prompt('削除する理由を入力してください（監査ログに記録されます）');
       if (!why || !why.trim()) return;
@@ -97,6 +98,8 @@ function manualCard(ctx) {
         h('div', { class: 'field' }, h('label', null, '摘要'), h('input', { type: 'text', maxlength: 100, on: { input: (e) => { draft.title = e.target.value; } } })),
         h('div', { class: 'field' }, h('label', null, '関連する契約（任意）'), select([['', '—'], ...data.contracts.map((c) => [c.id, `${c.id} ${c.name}`])], '', (v) => { draft.contractId = v; })),
         h('div', { class: 'field' }, h('label', null, '理由（必須）'), h('input', { type: 'text', maxlength: 1000, on: { input: (e) => { draft.reason = e.target.value; } } })),
+        h('div', { class: 'field' }, h('label', null, '区分'), select([['CON', '連結修正'], ['IND', '個社修正']], 'CON', (v) => { draft.kind = v; })),
+        h('div', { class: 'field' }, h('label', null, '翌期以降の扱い'), select([['none', '当期のみ（翌期は再計上しない）'], ['carry', '翌期以降も開始仕訳として引き継ぐ（損益は利益剰余金期首へ）']], 'none', (v) => { draft.carry = v; })),
         h('div', { class: 'field' }, h('label', null, '証憑・計算資料'), h('input', { type: 'text', maxlength: 300, on: { input: (e) => { draft.evidence = e.target.value; } } }))),
       h('div', { class: 'table-wrap' }, h('table', { class: 'tbl compact' }, h('thead', null, h('tr', null, ['科目', '科目名（手入力科目）', '会社', '借方', '貸方', ''].map((t) => h('th', null, t)))), body)),
       h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', on: { click: () => { draft.lines.push({ acc: 'MANUAL', label: '', co: 'CONSOL', dr: '', cr: '' }); drawRows(); } } }, '＋ 行を追加'), bal,
@@ -105,10 +108,10 @@ function manualCard(ctx) {
 
 function exportCsv(js, ctx) {
   const { pol, names, companies, period } = ctx;
-  const rows = [['期間', '仕訳ID', '区分', 'テンプレート', '摘要', '契約', '貸手', '借手', '貸借', '科目', '会社', '金額', '根拠']];
+  const rows = [['期間', '仕訳ID', '区分', 'テンプレート', '摘要', '契約', '貸手', '借手', '貸借', '科目キー', '科目', '会社', '金額', '根拠']];
   for (const j of js) {
     for (const l of j.lines) {
-      rows.push([period.label, j.id, j.kind === 'IND' ? '個社修正' : '連結修正', j.tpl, j.title, j.contractId, j.lessorCo, j.lesseeCo, l.amt > 0 ? '借方' : '貸方', accountLabel(l, pol, names), l.co === 'CONSOL' ? '連結' : l.co, Math.abs(l.amt), (l.bases || []).slice(0, 3).join(' / ')]);
+      rows.push([period.label, j.id, j.kind === 'IND' ? '個社修正' : '連結修正', j.tpl, j.title, j.contractId, j.lessorCo, j.lesseeCo, l.amt > 0 ? '借方' : '貸方', l.acc, accountLabel(l, pol, names), l.co === 'CONSOL' ? '連結' : l.co, Math.abs(l.amt), (l.bases || []).slice(0, 3).join(' / ')]);
     }
   }
   download(`仕訳帳_${period.label}.csv`, toCsv(rows), 'text/csv;charset=utf-8');

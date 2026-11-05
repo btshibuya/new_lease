@@ -21,6 +21,9 @@ export const state = {
   policies: null,
   ui: { granularity: 'year', periodIndex: null, contractId: null, journalFilter: {}, theme: null },
   storageOk: true,
+  loadWarnings: [],
+  loadError: null,
+  version: 0,
   listeners: new Set(),
 };
 
@@ -28,10 +31,15 @@ export function init() {
   const raw = loadRaw();
   if (raw && raw.data) {
     try {
-      state.data = sanitizeData(raw.data).data;
+      const res = sanitizeData(raw.data);
+      state.data = res.data;
+      state.loadWarnings = res.warnings;
       state.policies = sanitizePolicies(raw.policies);
       state.ui = { ...state.ui, ...(raw.ui && typeof raw.ui === 'object' ? { granularity: raw.ui.granularity === 'quarter' ? 'quarter' : 'year', periodIndex: Number.isInteger(raw.ui.periodIndex) ? raw.ui.periodIndex : null, theme: ['light', 'dark'].includes(raw.ui.theme) ? raw.ui.theme : null } : {}) };
-    } catch {
+    } catch (e) {
+      // 読込に失敗しても元のデータは消さず、別のキーに退避してから初期状態で開く
+      try { localStorage.setItem(`${KEY}.backup.${Date.now()}`, JSON.stringify(raw)); } catch { /* 退避できない場合も続行 */ }
+      state.loadError = `保存データを読み込めなかったため、退避してサンプルデータで開きました（${e.message}）。退避したデータは「データ管理」から書き出せます。`;
       state.data = sampleData();
       state.policies = defaultPolicies();
     }
@@ -57,7 +65,8 @@ export function subscribe(fn) {
   return () => state.listeners.delete(fn);
 }
 
-export function emit() {
+export function emit(dataChanged = true) {
+  if (dataChanged) state.version++;
   save();
   for (const fn of state.listeners) fn();
 }
@@ -71,21 +80,25 @@ export function update(mutator, action, detail) {
 
 export function setUi(patch) {
   Object.assign(state.ui, patch);
-  emit();
+  emit(false);
 }
 
 export function resetSample() {
   const log = state.data?.auditLog || [];
+  const anchor = state.data?.auditAnchor || '';
   state.data = sampleData();
   state.data.auditLog = log;
+  state.data.auditAnchor = anchor;
   appendLog(state.data.auditLog, 'サンプル復元', 'サンプルデータに置き換えました');
   emit();
 }
 
 export function replaceData(newData, label) {
   const log = state.data?.auditLog || [];
+  const anchor = state.data?.auditAnchor || '';
   state.data = newData;
   state.data.auditLog = [...log];
+  state.data.auditAnchor = anchor;
   appendLog(state.data.auditLog, 'データ取込', label);
   emit();
 }
@@ -99,10 +112,10 @@ export function snapshot() {
 }
 
 /** 期間の確定（スナップショット保存）。 */
-export function lockPeriod(period, nets, policiesText) {
+export function lockPeriod(period, nets, policies) {
   const s = indexToYm(period.start), e = indexToYm(period.end);
   if ((state.data.locks || []).some((l) => l.periodStart === s && l.periodEnd === e)) return false;
-  state.data.locks = [...(state.data.locks || []), { periodStart: s, periodEnd: e, label: period.label, lockedAt: new Date().toISOString(), policiesHash: chainHash('', policiesText), snapshot: nets }];
+  state.data.locks = [...(state.data.locks || []), { periodStart: s, periodEnd: e, label: period.label, lockedAt: new Date().toISOString(), policiesHash: chainHash('', JSON.stringify(policies)), policies: { ...policies }, snapshot: nets }];
   appendLog(state.data.auditLog, '期間確定', `${period.label}（契約 ${Object.keys(nets).length} 件のスナップショットを保存）`);
   emit();
   return true;
@@ -118,4 +131,20 @@ export function unlockPeriod(period, reason) {
 export function isLocked(period) {
   const s = indexToYm(period.start), e = indexToYm(period.end);
   return (state.data.locks || []).some((l) => l.periodStart === s && l.periodEnd === e);
+}
+
+/** 退避されたデータのキー一覧 */
+export function backups() {
+  const out = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(`${KEY}.backup.`)) out.push(k);
+    }
+  } catch { /* 取得できない環境 */ }
+  return out.sort();
+}
+
+export function readBackup(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
 }

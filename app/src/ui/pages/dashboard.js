@@ -12,7 +12,8 @@ export function renderDashboard(ctx) {
   const rou = sumClose((r) => r.ps.close.cost - r.ps.close.acc);
   const plPre = sumClose((r) => Object.values(r.E.close).reduce((a, v) => a + v, 0) - Object.values(r.E.open).reduce((a, v) => a + v, 0));
   const tax = sumClose((r) => Object.values(r.DT.close).reduce((a, v) => a + v, 0) - Object.values(r.DT.open).reduce((a, v) => a + v, 0));
-  const nci = sumClose((r) => Object.values(r.NCI.close).reduce((a, v) => a + v, 0) - Object.values(r.NCI.open).reduce((a, v) => a + v, 0));
+  // 非支配株主に帰属する当期純利益は仕訳（NCI_PL）から集計（持分変動による資本剰余金分を含めない）
+  const nci = gen.journals.flatMap((j) => j.lines).filter((l) => l.acc === 'NCI_PL').reduce((a, l) => a + l.amt, 0);
   const active = res.filter((r) => r.ps.months > 0 && r.sched.meta.start <= period.end).length;
   const ngs = checks.filter((c) => c.status === 'ng').length;
   const warns = checks.filter((c) => c.status === 'warn').length;

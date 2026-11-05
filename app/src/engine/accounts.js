@@ -23,6 +23,7 @@ export const ACCOUNTS = {
   PRE_RENT: { name: '支払リース料（適用開始前・旧基準）', type: 'PL', side: 'L', group: '費用' },
   TERM_GAIN: { name: 'リース解約損益', type: 'PL', side: 'L', group: '損益' },
   PENALTY_EXP: { name: '解約違約金（支払）', type: 'PL', side: 'L', group: '費用' },
+  MOD_GAIN: { name: 'リース条件変更損益（範囲の縮小）', type: 'PL', side: 'L', group: '損益' },
   IDC_EXP: { name: '初期直接費用（連結上の費用処理）', type: 'PL', side: 'L', group: '費用' },
   DEP_OTHER: { name: '減価償却費（初期直接費用）', type: 'PL', side: 'L', group: '費用' },
   // ── 貸手（BS） ──
@@ -40,7 +41,8 @@ export const ACCOUNTS = {
   RE_OPEN: { name: '利益剰余金期首残高', type: 'BS', side: 'C', group: '純資産' },
   NCI: { name: '非支配株主持分', type: 'BS', side: 'C', group: '純資産' },
   CAP_SURPLUS: { name: '資本剰余金（持分変動）', type: 'BS', side: 'C', group: '純資産' },
-  MANUAL: { name: '手入力科目', type: 'BS', side: 'C', group: '手入力' },
+  MANUAL: { name: '手入力科目（貸借対照表）', type: 'BS', side: 'C', group: '手入力' },
+  MANUAL_PL: { name: '手入力科目（損益計算書）', type: 'PL', side: 'C', group: '手入力' },
   NCI_PL: { name: '非支配株主に帰属する当期純利益', type: 'PL', side: 'C', group: '損益' },
   DTA: { name: '繰延税金資産（△は繰延税金負債）', type: 'BS', side: 'C', group: '資産' },
   TAX_ADJ: { name: '法人税等調整額', type: 'PL', side: 'C', group: '費用' },
@@ -66,9 +68,13 @@ export const LESSOR_DEP_CLASS = { cogs: '売上原価（賃貸原価）', nonop:
  * @param {object} names カスタマイズ層の科目名上書き
  */
 export function accountLabel(line, policies = {}, names = {}) {
-  if (line.acc === 'MANUAL' || (line.label && !ACCOUNTS[line.acc])) return line.label || '手入力科目';
-  const base = names[line.acc] || ACCOUNTS[line.acc]?.name || line.acc;
+  if (line.acc === 'MANUAL' || line.acc === 'MANUAL_PL' || (line.label && !ACCOUNTS[line.acc])) return line.label || ACCOUNTS[line.acc]?.name || '手入力科目';
   const m = line.meta || {};
+  // ユーザー別の科目名：「キー.区分」（例 DEP_ROU.mfg、LEASE_INC.sales）→「キー」の順に優先
+  const variant = { DEP_ROU: m.lesseeDept, DEP_RECLASS: m.lesseeDept, LEASE_INC: m.lessorIncClass, RENTAL_DEP: m.lessorDepClass, RECLASS_ASSET: m.assetClass, RECLASS_ACC: m.assetClass, ROU_COST: m.assetClass, ROU_ACC: m.assetClass }[line.acc];
+  if (variant && names[`${line.acc}.${variant}`]) return names[`${line.acc}.${variant}`];
+  if (names[line.acc] && !(line.acc === 'ROU_COST' || line.acc === 'ROU_ACC')) return names[line.acc];
+  const base = names[line.acc] || ACCOUNTS[line.acc]?.name || line.acc;
   const cls = ASSET_CLASSES[m.assetClass] || '';
   switch (line.acc) {
     case 'ROU_COST':
@@ -122,4 +128,21 @@ export function rateAt(co, idx, key) {
     if (y * 12 + m - 1 <= idx) v = h[key] || 0;
   }
   return v;
+}
+
+/** 連結損益計算書の区分（段階損益の比較用） */
+export function plSection(line) {
+  const m = line.meta || {};
+  switch (line.acc) {
+    case 'LEASE_INC': return m.lessorIncClass === 'nonop' ? '営業外収益' : '売上高';
+    case 'RENTAL_DEP': return m.lessorDepClass === 'nonop' ? '営業外費用' : '売上原価';
+    case 'DEP_ROU': case 'DEP_RECLASS': return m.lesseeDept === 'mfg' ? '売上原価' : '販管費';
+    case 'ASC_COST': case 'SHORT_COST': case 'PRE_RENT': case 'DEP_OTHER': case 'IDC_EXP': return m.lesseeDept === 'mfg' ? '売上原価' : '販管費';
+    case 'INT': return '営業外費用';
+    case 'TERM_GAIN': case 'MOD_GAIN': case 'PENALTY_EXP': case 'PENALTY_INC': return '特別損益';
+    case 'TAX_ADJ': return '法人税等';
+    case 'NCI_PL': return '非支配株主に帰属する当期純利益';
+    case 'MANUAL_PL': return '手入力（損益）';
+    default: return ACCOUNTS[line.acc]?.type === 'PL' ? 'その他の損益' : null;
+  }
 }

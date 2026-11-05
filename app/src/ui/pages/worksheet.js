@@ -23,17 +23,27 @@ export function renderWorksheet(ctx) {
   const bs = ws.filter((r) => r.type === 'BS');
   const pl = ws.filter((r) => r.type === 'PL');
 
-  // ブリッジ：単純合算の損益（リース関連）→ 連結修正（テンプレート別）→ 連結
-  const simplePL = -pl.reduce((a, r) => a + r.simple + r.ind, 0);
-  const steps = [{ label: '単純合算（リース関連損益）', value: simplePL, total: true }];
+  // ブリッジ：単純合算（税引前）→ 連結修正（テンプレート別・税引前）→ 連結（税引前）→ 税効果 → 税引後 → 非支配株主 → 親会社株主帰属
+  const simplePL = -pl.filter((r) => !['TAX_ADJ', 'NCI_PL'].includes(r.acc)).reduce((a, r) => a + r.simple + r.ind, 0);
+  const steps = [{ label: '単純合算（税引前）', value: simplePL, total: true, basis: '借手・貸手の個別のリース関連損益（個別の税効果は含まない）' }];
   const byTpl = new Map();
+  let tax = 0, nciPl = 0;
   for (const j of gen.journals) {
     if (j.kind !== 'CON') continue;
-    const v = -j.lines.filter((l) => ACCOUNTS[l.acc]?.type === 'PL').reduce((a, l) => a + l.amt, 0);
-    if (v) byTpl.set(j.tpl, (byTpl.get(j.tpl) || 0) + v);
+    for (const l of j.lines) {
+      if (ACCOUNTS[l.acc]?.type !== 'PL') continue;
+      if (l.acc === 'TAX_ADJ') tax -= l.amt;
+      else if (l.acc === 'NCI_PL') nciPl -= l.amt;
+      else byTpl.set(j.tpl, (byTpl.get(j.tpl) || 0) - l.amt);
+    }
   }
-  for (const [t, v] of byTpl) steps.push({ label: `${t} ${TEMPLATES[t]?.title.replace(/（.*）/, '') || ''}`, value: v, basis: TEMPLATES[t]?.title });
-  steps.push({ label: '連結（リース関連損益）', value: simplePL + [...byTpl.values()].reduce((a, v) => a + v, 0), total: true });
+  for (const [t, v] of byTpl) if (v) steps.push({ label: `${t} ${TEMPLATES[t]?.title.replace(/（.*）/, '') || ''}`, value: v, basis: TEMPLATES[t]?.title });
+  const pre = simplePL + [...byTpl.values()].reduce((a, v) => a + v, 0);
+  steps.push({ label: '連結（税引前）', value: pre, total: true });
+  if (tax) steps.push({ label: '税効果（法人税等調整額）', value: tax, basis: '個別税効果の取消（C-13）' });
+  steps.push({ label: '税引後', value: pre + tax, total: true, basis: '個別の税効果を含まないため、連結の当期純利益そのものではありません' });
+  if (nciPl) steps.push({ label: '非支配株主に帰属', value: nciPl, basis: 'C-14' });
+  steps.push({ label: '親会社株主に帰属', value: pre + tax + nciPl, total: true });
 
   const cf = cashFlowEliminations(gen, pol, period);
   const mat = maturity(gen, period);
@@ -47,7 +57,7 @@ export function renderWorksheet(ctx) {
       h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', on: { click: exportWs } }, 'CSV出力')),
       h('h3', null, '貸借対照表'), table(cols, bs),
       h('h3', null, '損益計算書'), table(cols, pl)),
-    card(null, waterfall({ title: '損益のブリッジ：単純合算から連結へ（税引前・税効果・非支配株主を含む）', subtitle: '各棒にカーソルを合わせると内容を表示。連結後に残るのは主に貸手資産の減価償却費（組替後）', steps, unit })),
+    card(null, waterfall({ wide: true, title: '損益のブリッジ：単純合算 → 連結（税引前）→ 税引後 → 親会社株主帰属（グループ内リース関連）', subtitle: '各棒にカーソルを合わせると内容を表示。連結（税引前）に残るのは主に貸手資産の減価償却費（組替後）', steps, unit })),
     h('div', { class: 'grid2' },
       card('連結キャッシュ・フロー計算書の消去データ', table([
         { label: '区分', key: 'section' }, { label: '項目', key: 'label' }, { label: '個別計上額', key: 'amount', num: true }, { label: '消去額', key: 'elim', num: true },

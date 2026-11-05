@@ -40,6 +40,7 @@ export function individualLines(result, companies, pol) {
   add('PRE_RENT', c.lesseeCo, preT, '借手個別：適用開始前の支払リース料');
   add(model === 'asc842ol' ? 'ASC_COST' : 'SHORT_COST', c.lesseeCo, ps.cost, '借手個別：リース費用');
   if (ps.term && ps.term.gain) add('TERM_GAIN', c.lesseeCo, -ps.term.gain, '借手個別：解約損益');
+  if (ps.modGain) add('MOD_GAIN', c.lesseeCo, -ps.modGain, '借手個別：条件変更損益');
   const pen = inP.reduce((a, x) => a + (x.lessee.penalty || 0), 0);
   add('PENALTY_EXP', c.lesseeCo, pen, '借手個別：支払違約金');
   add('PENALTY_INC', c.lessorCo, -pen, '貸手個別：受取違約金');
@@ -66,7 +67,7 @@ export function worksheet(gen, companies, pol, names, period) {
   const key = (l) => accountLabel(l, pol, names);
   const get = (l) => {
     const k = key(l);
-    if (!rows.has(k)) rows.set(k, { label: k, acc: l.acc, type: ACCOUNTS[l.acc]?.type, lessee: 0, lessor: 0, ind: 0, con: 0 });
+    if (!rows.has(k)) rows.set(k, { label: k, acc: l.acc, meta: l.meta, type: ACCOUNTS[l.acc]?.type, lessee: 0, lessor: 0, ind: 0, con: 0 });
     return rows.get(k);
   };
   for (const r of gen.results) {
@@ -90,7 +91,7 @@ export function worksheet(gen, companies, pol, names, period) {
 }
 
 /** グループ内で消去後に0となるべき科目 */
-export const MUST_BE_ZERO = ['ROU_COST', 'ROU_ACC', 'LL_C', 'LL_NC', 'LEASE_ACCRUED', 'DEP_ROU', 'INT', 'ASC_COST', 'SHORT_COST', 'PRE_RENT', 'LEASE_INC', 'ACCR_INC', 'PENALTY_INC', 'PENALTY_EXP', 'LEGACY_ASSET', 'LEGACY_ACC', 'LEGACY_LIAB', 'LEGACY_LIAB_C'];
+export const MUST_BE_ZERO = ['ROU_COST', 'ROU_ACC', 'LL_C', 'LL_NC', 'LEASE_ACCRUED', 'DEP_ROU', 'INT', 'ASC_COST', 'SHORT_COST', 'PRE_RENT', 'LEASE_INC', 'ACCR_INC', 'PENALTY_INC', 'PENALTY_EXP', 'MOD_GAIN', 'LEGACY_ASSET', 'LEGACY_ACC', 'LEGACY_LIAB', 'LEGACY_LIAB_C'];
 
 /** 連結CF計算書の消去データ */
 export function cashFlowEliminations(gen, pol, period) {
@@ -105,12 +106,19 @@ export function cashFlowEliminations(gen, pol, period) {
       if (!rec.lessee.active || sched.meta.model !== 'jgaap') opLease += rec.lessor.cash;
     }
     if (sched.meta.model === 'jgaap') {
-      for (const sg of sched.meta.segments) {
-        const pm = sg.pay.month;
-        if (pm < period.start || pm > period.end || (term !== null && pm > term)) continue;
-        const ip = Math.min(sg.interest, sg.pay.amount);
-        interestPaid += ip;
-        repay += sg.pay.amount - ip;
+      // 未払利息を繰り越し、支払額はまず未払利息に充当する（フリーレント期間の利息は次の支払で支払われる）
+      let unpaid = 0;
+      const adv = r.contract.timing === 'advance';
+      for (const x of sched.months) {
+        if (!x.lessee.active) continue;
+        if (x.m > period.end) break;
+        const p = x.lessee.pay || 0;
+        let ip = 0;
+        if (adv && p) { ip = Math.min(unpaid, p); unpaid -= ip; }
+        unpaid += x.lessee.int || 0;
+        if (!adv && p) { ip = Math.min(unpaid, p); unpaid -= ip; }
+        if (x.lessee.term) unpaid = 0;
+        if (x.m >= period.start && p) { interestPaid += ip; repay += p - ip; }
       }
     }
   }
@@ -145,9 +153,10 @@ export function maturity(gen, period) {
     const endRec = sched.byIndex(period.end);
     if (!endRec || !endRec.lessee.active || endRec.lessee.term) continue;
     let prevAfter = endRec.lessee.L_end;
-    for (const sg of sched.meta.segments) {
+    const ph = sched.meta.phases.reduce((a, x) => (x.start <= period.end ? x : a), sched.meta.phases[0]);
+    for (const sg of ph.segs) {
       const p = sg.pay;
-      if (p.month <= period.end || (term !== null && p.month > term)) continue;
+      if (p.month <= period.end) continue; // 流動区分（currentPortion）と同じく、決算日時点の契約上の支払予定で区分する
       const d = p.month - period.end;
       const b = vals.find((x) => d >= x.from && d <= x.to);
       // 元本ベース：その支払で減少する残高（期末残高からの減少分）

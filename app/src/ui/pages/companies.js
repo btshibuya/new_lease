@@ -22,6 +22,10 @@ export function renderCompanies(ctx) {
     h('td', null, inp(c, 'taxEffect', 'checkbox', { label: '個別で税効果を計上' })),
     h('td', null, inp(c, 'legacyAccounts', 'checkbox', { label: '旧科目名' })),
     h('td', null, inp(c, 'splitsCurrent', 'checkbox', { invert: true, label: '流動区分なし' })),
+    h('td', null, inp(c, 'dtaRatio', 'pct', { label: '繰延税金資産の計上割合' })),
+    h('td', null, h('select', { 'aria-label': '適用初年度の方法', on: { change: (e) => { c.adoption = { ...(c.adoption || {}), method: e.target.value }; } } },
+      [['cumulative', '累積的影響方式'], ['retrospective', '完全遡及'], ['applied', '適用済み（IFRS・US GAAP等）']].map(([v, l]) => h('option', { value: v, selected: (c.adoption?.method || 'cumulative') === v }, l))),
+      h('input', { type: 'month', value: c.adoption?.ym || '2027-04', 'aria-label': '適用開始年月', on: { input: (e) => { c.adoption = { ...(c.adoption || {}), ym: e.target.value }; } } })),
     h('td', null, used.has(c.code) ? h('span', { class: 'muted' }, '使用中') : h('button', { class: 'btn-link danger', type: 'button', on: { click: () => update((d) => { d.companies = d.companies.filter((x) => x.code !== c.code); }, '会社削除', c.code) } }, '削除'))));
   const save = () => {
     const clean = draft.map(sanitizeCompany);
@@ -31,15 +35,18 @@ export function renderCompanies(ctx) {
     if (clean.filter((c) => c.isParent).length !== 1) return toast('親会社を1社選んでください', 'error');
     const missing = [...used].filter((c) => !codes.includes(c));
     if (missing.length) return toast(`契約で使用中の会社コードは変更できません：${missing.join('、')}`, 'error');
+    // 使用中の会社の基準税率・持分比率を変えると、履歴のない過去期間も遡って変わる
+    const changed = clean.filter((c) => { const o = data.companies.find((x) => x.code === c.code); return o && used.has(c.code) && (o.taxRate !== c.taxRate || o.nciRatio !== c.nciRatio); });
+    if (changed.length && !confirm(`${changed.map((c) => c.code).join('、')} の基準税率・持分比率を変更すると、履歴のない過去の期間も遡って再計算されます（確定済み期間は CHK-13 が NG になります）。\n税率改正や持分の変動であれば、下の「履歴」に適用開始年月つきで追加してください。\n\nこのまま基準値を変更しますか？`)) return;
     update((d) => { d.companies = clean; }, '会社マスタ更新', `${clean.length}社`);
     toast('保存しました');
   };
   return h('div', { class: 'page' },
     h('h1', null, '会社マスタ'),
     card(null,
-      h('p', { class: 'help' }, '法定実効税率は税効果（POL-02）、非支配株主持分比率は非支配株主持分への按分（POL-01）に使います。「旧科目名」は個別で「リース資産／リース債務」の科目を使っている会社（個社修正 IND-01 で組替）、「流動区分なし」は個別でリース負債を流動・固定に区分していない会社（IND-02）です。'),
+      h('p', { class: 'help' }, '法定実効税率は税効果（POL-02）、非支配株主持分比率は非支配株主持分への按分（POL-01）に使います。「繰延税金資産の計上割合」は、回収可能性により個別で繰延税金資産を一部しか計上していない場合に設定します（取消額に反映）。「適用初年度」は、適用開始前に開始した契約の借手の測定に使います（累積的影響方式：適用開始時の残高から測定、完全遡及：リース開始時から測定）。「旧科目名」は個別で「リース資産／リース債務」の科目を使っている会社（個社修正 IND-01 で組替）、「流動区分なし」は個別でリース負債を流動・固定に区分していない会社（IND-02）です。'),
       h('div', { class: 'table-wrap' }, h('table', { class: 'tbl form-table' },
-        h('thead', null, h('tr', null, ['会社コード', '会社名', '親会社', '決算月', '法定実効税率（％）', '非支配株主持分比率（％）', '個別で税効果を計上', '旧科目名を使用', '流動区分なし', ''].map((t) => h('th', null, t)))),
+        h('thead', null, h('tr', null, ['会社コード', '会社名', '親会社', '決算月', '法定実効税率（％）', '非支配株主持分比率（％）', '個別で税効果を計上', '旧科目名を使用', '流動区分なし', '繰延税金資産の計上割合（％）', '新リース会計基準の適用初年度（方法・期首）', ''].map((t) => h('th', null, t)))),
         h('tbody', null, rows))),
       h('div', { class: 'actions' },
         h('button', { class: 'btn', type: 'button', on: { click: () => update((d) => d.companies.push(sanitizeCompany({ code: `C${d.companies.length + 1}`, name: '新しい会社', fyeMonth: 3, taxRate: 0.3 })), '会社追加', '') } }, '＋ 会社を追加'),
@@ -61,7 +68,7 @@ function historyCard(data) {
         h('td', null, h('button', { class: 'btn-link danger', type: 'button', on: { click: () => { c.history.splice(i, 1); draw(); } } }, '削除')))));
     draw();
     return h('details', null, h('summary', null, `${c.code} ${c.name}（変更 ${c.history.length}件）`),
-      h('div', { class: 'table-wrap' }, h('table', { class: 'tbl compact' }, h('thead', null, h('tr', null, ['適用開始年月', '法定実効税率（％）', '非支配株主持分比率（％）', ''].map((t) => h('th', null, t)))), body)),
+      h('div', { class: 'table-wrap' }, h('table', { class: 'tbl compact' }, h('thead', null, h('tr', null, ['適用開始年月（税率は成立日を含む期の期首／持分は変動月）', '法定実効税率（％）', '非支配株主持分比率（％）', ''].map((t) => h('th', null, t)))), body)),
       h('div', { class: 'actions' },
         h('button', { class: 'btn', type: 'button', on: { click: () => { c.history.push({ fromYm: '2028-04', taxRate: c.base.taxRate, nciRatio: c.base.nciRatio }); draw(); } } }, '＋ 変更を追加'),
         h('button', { class: 'btn primary', type: 'button', on: { click: () => {
@@ -72,6 +79,6 @@ function historyCard(data) {
         } } }, '履歴を保存')));
   });
   return card('税率・非支配株主持分比率の履歴（期別）',
-    h('p', { class: 'help' }, '税率改正や持分の追加取得・売却があった場合に、適用開始年月から新しい率を使います。過去の期間は当時の率で再計算されるため、開始仕訳は前期末の確定額と一致します。税率変更の影響は当期の法人税等調整額（C-13）、持分比率の変動は資本剰余金（C-14、資本取引）で処理します。'),
+    h('p', { class: 'help' }, '税率改正の場合は「改正税法の成立日を含む決算期の期首年月」を入力します（繰延税金は決算日までに成立した税率で計算するため。施行日ではありません）。持分の追加取得・売却の場合は、持分が変動した月を入力します。その月から新しい率を使います。過去の期間は当時の率で再計算されるため、開始仕訳は前期末の確定額と一致します。税率変更の影響は当期の法人税等調整額（C-13）、持分比率の変動は資本剰余金（C-14、資本取引）で処理します。'),
     ...blocks);
 }

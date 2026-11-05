@@ -87,14 +87,38 @@ test('年度別サマリーの消去差額（累計）＝ 53, 81, 82, 55, 0', ()
   assert.deepEqual(yr.map((r) => r.plEffect), [53, 28, 1, -27, -55]);
 });
 
-test('非支配株主持分の按分（借手60%子会社）', () => {
+test('非支配株主持分の按分：基礎＝借手・貸手の税効果後修正額の合計 × 借手の比率（受払のタイミング差は按分しない）', () => {
   const g = generateAll(data, FY[1], pol);
   const r = g.results.find((x) => x.contract.id === 'K-002');
-  const e = r.E.open.S2;
-  const dt = r.DT.open.S2;
-  assert.equal(r.NCI.open.S2, round((e - dt) * 0.4));
+  const base = (r.E.open.S2 - r.DT.open.S2) + (r.E.open.P - r.DT.open.P);
+  assert.equal(r.NCI.open.S2, round(base * 0.4));
   const g2 = generateAll(data, FY[1], { ...pol, 'POL-01': 'none' });
   assert.ok(!g2.journals.some((j) => j.tpl === 'C-14' || j.tpl === 'C-01N'));
+});
+
+test('借手簡便法・フリーレントでは連結全体の影響0のため、非支配株主持分も0', () => {
+  const c = { ...JSON.parse(JSON.stringify(data.contracts.find((x) => x.id === 'K-003'))), id: 'OB', lessorCo: 'P', lesseeCo: 'S2', freePayments: 6, termMonths: 12 };
+  for (const p of [...FY, ...buildPeriods(ymToIndex('2027-04'), ymToIndex('2029-03'), 3, 'quarter')]) {
+    const r = generateAll({ ...data, contracts: [c] }, p, pol).results[0];
+    assert.equal(r.NCI.close.S2, 0, p.label);
+  }
+});
+
+test('期中の持分変動：四半期の合計＝年度（非支配株主帰属・資本剰余金）', () => {
+  const d = JSON.parse(JSON.stringify(data));
+  const s1 = d.companies.find((x) => x.code === 'S1');
+  s1.nciRatio = 0.4;
+  s1.history = [{ fromYm: '2028-10', taxRate: 0.3, nciRatio: 0.1 }];
+  const dd = { ...d, contracts: [k001] };
+  const sumOf = (gen, acc) => gen.journals.filter((j) => j.tpl === 'C-14').flatMap((j) => j.lines).filter((l) => l.acc === acc).reduce((a, l) => a + l.amt, 0);
+  const year = generateAll(dd, FY[1], pol);
+  const qs = buildPeriods(ymToIndex('2028-04'), ymToIndex('2029-03'), 3, 'quarter').map((p) => generateAll(dd, p, pol));
+  assert.equal(qs.reduce((a, g) => a + sumOf(g, 'NCI_PL'), 0), sumOf(year, 'NCI_PL'));
+  assert.equal(qs.reduce((a, g) => a + sumOf(g, 'CAP_SURPLUS'), 0), sumOf(year, 'CAP_SURPLUS'));
+  // 翌期の開始仕訳に資本剰余金が引き継がれる
+  const next = generateAll(dd, FY[2], pol);
+  const capOpen = next.journals.filter((j) => j.tpl === 'C-01N').flatMap((j) => j.lines).filter((l) => l.acc === 'CAP_SURPLUS').reduce((a, l) => a + l.amt, 0);
+  assert.equal(capOpen, sumOf(year, 'CAP_SURPLUS'));
 });
 
 test('全サンプル契約・全会計方針の組合せ・年度/四半期で検算NGがない', () => {
@@ -217,13 +241,17 @@ test('旧科目名＋流動区分ありの借手でも、連結後の流動・�
   }
 });
 
-test('JSON取込：__proto__ を含むデータでプロトタイプ汚染が起きず、重複番号・不正コードは拒否', () => {
+test('JSON取込：__proto__ を含むデータでプロトタイプ汚染が起きず、重複番号・予約語は付け替えて警告', () => {
   const raw = JSON.parse('{"companies":[{"code":"P","name":"P","__proto__":{"polluted":1}}],"contracts":[],"__proto__":{"polluted2":1}}');
   sanitizeData(raw);
   assert.equal({}.polluted, undefined);
   assert.equal({}.polluted2, undefined);
-  assert.throws(() => sanitizeData({ companies: [{ code: '__proto__' }], contracts: [] }));
-  assert.throws(() => sanitizeData({ companies: [{ code: 'P' }], contracts: [{ id: 'A' }, { id: 'A' }] }));
+  const r1 = sanitizeData({ companies: [{ code: '__proto__' }, { code: 'P' }], contracts: [{ id: 'A', lesseeCo: '__proto__' }, { id: 'A' }, { id: 'constructor' }] });
+  assert.ok(r1.warnings.length >= 3);
+  assert.notEqual(r1.data.companies[0].code, '__proto__');
+  assert.equal(r1.data.contracts[0].lesseeCo, r1.data.companies[0].code);
+  assert.equal(new Set(r1.data.contracts.map((c) => c.id)).size, 3);
+  assert.ok(!r1.data.contracts.some((c) => c.id === 'constructor'));
 });
 
 test('土地（非償却）の貸手資産は減価償却費0、組替は取得原価のみ', () => {

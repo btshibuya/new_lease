@@ -1,6 +1,6 @@
 import { h, card, table, download, toast, statusBadge } from '../dom.js';
-import { state, exportJson, replaceData, resetSample, update } from '../store.js';
-import { sanitizeData, verifyChain } from '../../engine/data.js';
+import { state, exportJson, replaceData, resetSample, update, backups, readBackup } from '../store.js';
+import { sanitizeData, verifyChain, appendLog } from '../../engine/data.js';
 import { sanitizePolicies } from '../../engine/policies.js';
 import { ACCOUNTS } from '../../engine/accounts.js';
 
@@ -19,7 +19,12 @@ export function renderData(ctx) {
       const body = raw && raw.format === 'newlease-consolidation' ? raw : { data: raw };
       const { data: clean, warnings } = sanitizeData(body.data);
       if (!confirm(`会社 ${clean.companies.length} 社・契約 ${clean.contracts.length} 件を読み込み、現在のデータを置き換えます。よろしいですか？${warnings.length ? `\n\n注意：\n${warnings.slice(0, 5).join('\n')}` : ''}`)) return;
-      if (body.policies) state.policies = sanitizePolicies(body.policies);
+      if (body.policies) {
+        const np = sanitizePolicies(body.policies);
+        const diff = Object.keys(np).filter((k) => np[k] !== state.policies[k]).map((k) => `${k}:${state.policies[k]}→${np[k]}`);
+        state.policies = np;
+        if (diff.length) appendLog(state.data.auditLog, '会計方針変更（取込）', diff.join('、'));
+      }
       replaceData(clean, `${f.name}（会社${clean.companies.length}・契約${clean.contracts.length}）`);
       toast('読み込みました');
     } catch (err) {
@@ -37,8 +42,11 @@ export function renderData(ctx) {
         h('button', { class: 'btn primary', type: 'button', on: { click: () => download(`newlease_${new Date().toISOString().slice(0, 10)}.json`, exportJson(), 'application/json') } }, 'JSONで書き出す'),
         h('label', { class: 'btn' }, 'JSONを読み込む', file),
         h('button', { class: 'btn danger', type: 'button', on: { click: () => { if (confirm('現在のデータをサンプルデータに置き換えますか？（監査ログは残ります）')) resetSample(); } } }, 'サンプルデータに戻す'))),
+    backups().length ? card('退避されたデータ',
+      h('p', { class: 'help' }, '読込に失敗した保存データを退避しています。書き出して内容を確認してください。'),
+      h('ul', null, backups().map((k) => h('li', null, k, ' ', h('button', { class: 'btn-link', type: 'button', on: { click: () => download(`${k}.json`, readBackup(k) || '', 'application/json') } }, '書き出す'))))) : null,
     card('科目名のカスタマイズ（ユーザー別設定）',
-      h('p', { class: 'help' }, '共通部品の科目名を、利用会社の勘定科目名に置き換えられます。空欄は標準名を使います。'),
+      h('p', { class: 'help' }, '共通部品の科目名を、利用会社の勘定科目名に置き換えられます。空欄は標準名を使います。区分ごとに変えたい場合は「キー.区分」（例：DEP_ROU.mfg、LEASE_INC.nonop、RECLASS_ASSET.building）でも指定できます（JSONで編集）。'),
       h('div', { class: 'table-wrap scroll-y' }, h('table', { class: 'tbl compact' },
         h('thead', null, h('tr', null, h('th', null, 'キー'), h('th', null, '標準の科目名'), h('th', null, '利用会社の科目名'))),
         h('tbody', null, nameRows.map((r) => h('tr', null, h('td', null, r.k), h('td', null, r.v.name), h('td', null, h('input', { type: 'text', maxlength: 60, value: names[r.k] || '', 'aria-label': r.v.name, on: { input: (e) => { if (e.target.value) names[r.k] = e.target.value; else delete names[r.k]; } } }))))))),

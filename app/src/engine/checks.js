@@ -1,11 +1,12 @@
 // 自動検算（共通部品）
 // 原則：仕訳の生成（elimination.js の「個別仕訳の取消」）とは別の計算経路で、期待値を独立に組み立てて比較する。
 // 各検算の「独立性」の程度は independence に明記する（自己一致にすぎない検算を独立検証と誤認させないため）。
+// 注意：すべての誤りを検出できるわけではない。検出できる誤りの例は tests/mutation.test.js を参照。
 import { generateAll } from './elimination.js';
-import { worksheet, MUST_BE_ZERO, eFromSchedule } from './reports.js';
-import { validateContract } from './schedule.js';
+import { worksheet, MUST_BE_ZERO, eFromSchedule, cashFlowEliminations } from './reports.js';
+import { validateContract, sortedMods, periodSummary } from './schedule.js';
 import { round, fmt, ymToIndex, indexToJp, indexToYm } from './util.js';
-import { ACCOUNTS, rateAt } from './accounts.js';
+import { ACCOUNTS, accountLabel } from './accounts.js';
 
 const OK = 'ok', WARN = 'warn', NG = 'ng';
 
@@ -13,26 +14,104 @@ function item(id, title, status, detail, rows = [], independence = '') {
   return { id, title, status, detail, rows, independence };
 }
 
-const FLOW_TPLS = new Set(['C-01', 'C-02', 'C-03', 'C-04', 'C-17', 'C-B']);
+const FLOW_TPLS = new Set(['C-01', 'C-02', 'C-03', 'C-04', 'C-20', 'C-17', 'C-B']);
 const TAX_TPLS = new Set(['C-01T', 'C-13', 'C-BT']);
 const NCI_TPLS = new Set(['C-01N', 'C-14', 'C-BN']);
 
-/** 契約条件から直接、月ごとの支払額を求める（スケジュール計算とは別の実装） */
-function paymentsFromTerms(c) {
+/** 税率・持分比率の時点値（エンジンの rateAt とは別実装：新しい履歴から逆順に探す） */
+function rateIndep(co, idx, key) {
+  if (!co) return 0;
+  const hist = [...(co.history || [])].reverse();
+  for (const h of hist) {
+    const y = Number(h.fromYm.slice(0, 4)), m = Number(h.fromYm.slice(5, 7));
+    if ((y - 0) * 12 + (m - 1) <= idx) return h[key] || 0;
+  }
+  return co[key] || 0;
+}
+
+/** 契約条件（条件変更を含む）から直接、月ごとの支払額を求める（スケジュール計算とは別の実装） */
+function paymentsFromTerms(c, ignoreTermination = false) {
   const s = ymToIndex(c.commencement);
   const out = new Map();
-  const term = c.terminationYm ? ymToIndex(c.terminationYm) : null;
+  const term = c.terminationYm && !ignoreTermination ? ymToIndex(c.terminationYm) : null;
+  const mods = sortedMods(c);
+  let N = c.termMonths;
+  for (const m of mods) N = m.termMonths ?? N;
   const steps = [...(c.steps || [])].sort((a, b) => b.fromPayment - a.fromPayment);
-  for (let m = s; m < s + c.termMonths; m++) {
+  for (let m = s; m < s + N; m++) {
     const rel = m - s;
     let no = null;
     if (c.timing === 'advance' && rel % c.frequencyMonths === 0) no = rel / c.frequencyMonths + 1;
     if (c.timing !== 'advance' && (rel + 1) % c.frequencyMonths === 0) no = (rel + 1) / c.frequencyMonths;
     if (no === null || (term !== null && m > term)) continue;
-    const amt = no <= (c.freePayments || 0) ? 0 : (steps.find((x) => no >= x.fromPayment)?.amount ?? c.payment);
+    let amt = no <= (c.freePayments || 0) ? 0 : (steps.find((x) => no >= x.fromPayment)?.amount ?? c.payment);
+    const mod = [...mods].reverse().find((x) => ymToIndex(x.ym) <= m && x.payment !== null && x.payment !== undefined);
+    if (mod) amt = mod.payment;
     if (amt) out.set(m, amt);
   }
   return out;
+}
+
+/** 貸手の受取リース料（定額法）を契約条件から別実装で計算：月→当月の収益 */
+function lessorIncomeFromTerms(c, R) {
+  const s = ymToIndex(c.commencement);
+  const mods = sortedMods(c);
+  const term = c.terminationYm ? ymToIndex(c.terminationYm) : null;
+  const TR = c.lessor?.termMonths ? s + c.lessor.termMonths - 1 : null;
+  const planAt = (m) => {
+    // 月 m 時点で有効な契約条件のもとでの支払予定と終了月
+    const known = { ...c, modifications: mods.filter((x) => ymToIndex(x.ym) <= m) };
+    let N = c.termMonths;
+    for (const x of known.modifications) N = x.termMonths ?? N;
+    return { pays: paymentsFromTerms({ ...known, terminationYm: null }, true), end: s + N - 1 };
+  };
+  const out = new Map();
+  let R_bal = 0, segStart = s, segEnd = null, segTotal = 0, cumPrev = 0;
+  const finalEnd = planAt(Infinity).end;
+  const last = term ?? finalEnd;
+  for (let m = s; m <= last; m++) {
+    const isMod = mods.some((x) => ymToIndex(x.ym) === m);
+    if (m === s || isMod || m === segEnd + 1) {
+      const p = planAt(m);
+      const end = TR !== null && TR >= m ? Math.min(TR, p.end) : p.end;
+      let tot = 0;
+      for (const [mm, a] of p.pays) if (mm >= m && mm <= end) tot += a;
+      segStart = m; segEnd = end; segTotal = tot - (m === s ? 0 : R_bal); cumPrev = 0;
+    }
+    const cum = R((segTotal * (m - segStart + 1)) / (segEnd - segStart + 1));
+    let inc = cum - cumPrev;
+    cumPrev = cum;
+    const cash = planAt(m).pays.get(m) || 0;
+    R_bal += inc - cash;
+    if (term !== null && m === term) { inc -= R_bal; R_bal = 0; }
+    out.set(m, inc);
+  }
+  return out;
+}
+
+/** 非支配株主持分の期待値（エンジンの nciAt とは別実装：月次に比率の変化点を走査） */
+function nciExpected(sched, coMap, pol, idx, R) {
+  const c = sched.contract;
+  if (pol['POL-01'] !== 'allocate') return { N: 0, cap: 0 };
+  const L = coMap[c.lesseeCo];
+  const base = (t) => {
+    const e = eFromSchedule(sched, t, pol);
+    let b = 0;
+    for (const k of [c.lesseeCo, c.lessorCo]) {
+      const C = coMap[k];
+      const ek = e[k] || 0;
+      const tax = pol['POL-02'] === 'reverse' && C && C.taxEffect !== false ? R(ek * rateIndep(C, t, 'taxRate') * (ek > 0 ? (C.dtaRatio ?? 1) : 1)) : 0;
+      b += ek - tax;
+    }
+    return b;
+  };
+  let cap = 0;
+  for (let t = sched.meta.firstIdx + 1; t <= idx; t++) {
+    const n0 = rateIndep(L, t - 1, 'nciRatio'), n1 = rateIndep(L, t, 'nciRatio');
+    if (n0 !== n1) { const b = base(t - 1); cap += R(n1 * b) - R(n0 * b); }
+  }
+  const N = R(rateIndep(L, idx, 'nciRatio') * base(idx));
+  return pol['POL-14'] === 'capital' ? { N: N - cap, cap: 0 } : { N, cap };
 }
 
 /** スケジュールの残高・期間合計から、消去額（開始＋当期の動き）の期待値を独立に組み立てる（科目|会社 → 金額） */
@@ -63,16 +142,19 @@ function expectedFlowNet(r, pol, period) {
     if (!le.active) add('PRE_RENT', L, -(lo.cash || 0));
     add('LEASE_INC', Rc, lo.inc || 0);
     if (le.commence && le.commence.idc && pol['POL-07'] !== 'capitalize') add('IDC_EXP', L, le.commence.idc);
+    if (le.commence && le.commence.retroAcc) add('RE_OPEN', L, le.commence.C0 - le.commence.retroAcc - le.commence.L0);
     if (pol['POL-07'] === 'capitalize') add('DEP_OTHER', L, le.idcDep || 0);
+    if (le.remeasure && le.remeasure.gain) add('MOD_GAIN', L, le.remeasure.gain);
     if (le.term) {
       add('TERM_GAIN', L, m.model === 'offbalance' ? le.term.X || 0 : le.term.gain || 0);
       if (pol['POL-07'] === 'capitalize' && m.idc) add('TERM_GAIN', L, m.idc - (le.term.idcAcc || 0));
     }
     if (le.penalty) { add('PENALTY_INC', Rc, le.penalty); add('PENALTY_EXP', L, -le.penalty); }
   }
-  // 利益剰余金期首＝前期末のスケジュール残高から求めた純資産修正額の合計（符号反転）
+  // 利益剰余金期首＝前期末のスケジュール残高から求めた会社別の純資産修正額（符号反転）
   const eo = eFromSchedule(sched, period.start - 1, pol);
-  add('RE_OPEN', 'CONSOL', -((eo[L] || 0) + (eo[Rc] || 0)));
+  add('RE_OPEN', L, -(eo[L] || 0));
+  add('RE_OPEN', Rc, -(eo[Rc] || 0));
   for (const [k, v] of [...exp]) if (!v) exp.delete(k);
   return exp;
 }
@@ -98,6 +180,7 @@ function diffMaps(a, b) {
   }
   return out;
 }
+const accName = (key) => `${ACCOUNTS[key.split('|')[0]]?.name || key.split('|')[0]}（${key.split('|')[1]}）`;
 
 /**
  * @returns {Array<{id,title,status,detail,rows,independence}>}
@@ -106,275 +189,380 @@ export function runChecks(data, period, pol, gen, names = {}, opts = {}) {
   const out = [];
   const co = Object.fromEntries(data.companies.map((x) => [x.code, x]));
   const R = (v) => round(v, pol['POL-11'] || 'half_up');
+  const safe = (id, title, fn, independence) => {
+    try { out.push(fn()); } catch (e) { out.push(item(id, title, NG, `検算の実行中にエラーが発生しました：${e.message}`, [], independence)); }
+  };
 
-  // CHK-00 入力検証
-  const inv = [];
-  const seen = new Set();
-  for (const c of data.contracts) {
-    if (seen.has(c.id)) inv.push({ contract: c.id, message: '契約番号が重複しています（別の契約のスケジュールで仕訳が作られるおそれ）' });
-    seen.add(c.id);
-    for (const e of validateContract(c, data.companies)) inv.push({ contract: c.id, message: e });
-  }
-  for (const e of gen.errors) inv.push({ contract: e.contractId, message: `計算エラー：${e.message}` });
-  out.push(item('CHK-00', '契約データの入力検証', inv.length ? NG : OK, inv.length ? `${inv.length}件の入力エラーがあります` : 'すべての契約が入力ルールを満たし、契約番号は一意です', inv, '入力ルールの検査'));
-
-  // CHK-01 貸借一致
-  const unbal = gen.journals.filter((j) => j.lines.reduce((a, l) => a + l.amt, 0) !== 0).map((j) => ({ contract: j.contractId, message: `${j.tpl} ${j.title}：差額 ${fmt(j.lines.reduce((a, l) => a + l.amt, 0))}` }));
-  out.push(item('CHK-01', '仕訳の貸借一致', unbal.length ? NG : OK, unbal.length ? `${unbal.length}本の仕訳で貸借が一致しません` : `${gen.journals.length}本すべて貸借一致`, unbal, '仕訳ごとの合計検査'));
-
-  // CHK-02 契約条件からの支払額の独立計算
-  const pay = [];
-  for (const r of gen.results) {
-    const c = r.contract;
-    let expP = 0;
-    for (const [m, a] of paymentsFromTerms(c)) if (m >= period.start && m <= period.end) expP += a;
-    const schedP = r.sched.months.filter((x) => x.m >= period.start && x.m <= period.end).reduce((a, x) => a + (x.lessor.cash || 0), 0);
-    if (expP !== schedP) pay.push({ contract: c.id, message: `契約条件から求めた当期の支払 ${fmt(expP)} ≠ スケジュールの支払 ${fmt(schedP)}` });
-    // 貸手の受取リース料（定額法）：総リース料 × 経過月数 ÷ リース期間（解約月までは定額、解約月に未収を取崩）
-    const s0 = ymToIndex(c.commencement);
-    const total = [...paymentsFromTerms({ ...c, terminationYm: null }).values()].reduce((a, v) => a + v, 0);
-    const term = c.terminationYm ? ymToIndex(c.terminationYm) : null;
-    const cumInc = (idx) => {
-      if (idx < s0) return 0;
-      if (term !== null && idx >= term) return [...paymentsFromTerms(c)].filter(([m]) => m <= term).reduce((a, [, v]) => a + v, 0);
-      return R((total * Math.min(idx - s0 + 1, c.termMonths)) / c.termMonths);
-    };
-    const expInc = cumInc(period.end) - cumInc(period.start - 1);
-    const schedInc = r.ps.inc;
-    if (expInc !== schedInc) pay.push({ contract: c.id, message: `契約条件から求めた当期の受取リース料（定額法）${fmt(expInc)} ≠ スケジュール ${fmt(schedInc)}` });
-  }
-  out.push(item('CHK-02', '支払額・受取リース料の独立計算（契約条件 → 当期の金額）', pay.length ? NG : OK, pay.length ? `${pay.length}契約で不一致` : '契約条件（回数・フリーレント・段階賃料・解約）から別実装で求めた支払額・貸手の定額収益と一致', pay, '別実装で再計算'));
-
-  // CHK-03 ロールフォワードと消去差額の恒等式
-  const idt = [];
-  for (const r of gen.results) {
-    const { ps, sched, contract: c } = r;
-    if (sched.meta.model !== 'offbalance') {
-      const newL = ps.commence ? ps.commence.L0 : 0;
-      const tL = ps.term ? ps.term.L : 0;
-      const Lcalc = ps.open.L + newL + ps.int + ps.accr - ps.pay - tL;
-      if (Lcalc !== ps.close.L) idt.push({ contract: c.id, message: `リース負債：期首 ${fmt(ps.open.L)} ＋新規 ${fmt(newL)} ＋利息 ${fmt(ps.int + ps.accr)} −支払 ${fmt(ps.pay)} −取崩 ${fmt(tL)} ＝ ${fmt(Lcalc)} ≠ 期末 ${fmt(ps.close.L)}` });
+  safe('CHK-00', '契約データの入力検証', () => {
+    const inv = [];
+    const seen = new Set();
+    for (const c of data.contracts) {
+      if (seen.has(c.id)) inv.push({ contract: c.id, message: '契約番号が重複しています（別の契約のスケジュールで仕訳が作られるおそれ）' });
+      seen.add(c.id);
+      for (const e of validateContract(c, data.companies)) inv.push({ contract: c.id, message: e });
+      if (c.lessee?.taxLease) inv.push({ contract: c.id, message: '法人税法上のリース取引（売買扱い）に該当する契約：個別の税務処理が異なるため、税効果（C-13）を個別に検討し、必要なら手入力仕訳で調整してください', warn: true });
     }
-    let expL = 0, inc = 0, gain = 0, idcExp = 0, idcKeep = 0;
-    for (const x of sched.months) {
-      if (x.m > period.end) break;
-      const le = x.lessee;
-      expL += (le.dep || 0) + (le.int || 0) + (le.cost || 0) + (!le.active ? x.lessor.cash : 0);
-      inc += x.lessor.inc || 0;
-      if (le.term) gain += le.term.gain || 0;
-      if (le.commence && le.commence.idc) idcExp += le.commence.idc;
-      if (pol['POL-07'] === 'capitalize') {
-        idcKeep += le.idcDep || 0;
-        if (le.term && sched.meta.idc) idcKeep += sched.meta.idc - le.term.idcAcc;
-      }
-    }
-    const plEffect = expL - inc - gain - (pol['POL-07'] === 'capitalize' ? idcKeep : idcExp);
-    const es = eFromSchedule(sched, period.end, pol);
-    const bs = (es[c.lesseeCo] || 0) + (es[c.lessorCo] || 0);
-    const E = (r.E.close[c.lesseeCo] || 0) + (r.E.close[c.lessorCo] || 0);
-    if (plEffect !== E || bs !== E) idt.push({ contract: c.id, message: `損益の累計 ${fmt(plEffect)}、残高の差 ${fmt(bs)}、仕訳の純資産修正額 ${fmt(E)} が一致しません` });
-    else idt.push({ contract: c.id, message: `一致：Σ借手費用 ${fmt(expL)} − Σ貸手収益 ${fmt(inc)} − 解約益 ${fmt(gain)}${pol['POL-07'] !== 'capitalize' && idcExp ? ` − 初期直接費用 ${fmt(idcExp)}` : ''} ＝ 残高の差 ＝ ${fmt(E)}`, ok: true });
-  }
-  const idtNg = idt.filter((x) => !x.ok);
-  out.push(item('CHK-03', '消去差額の恒等式（損益の累計＝残高の差＝仕訳の純資産修正額）とロールフォワード', idtNg.length ? NG : OK, idtNg.length ? `${idtNg.length}件の不一致` : '全契約で3つの計算経路が一致', idt, '損益・残高（スケジュール）と仕訳の比較'));
+    for (const e of gen.errors) inv.push({ contract: e.contractId, message: `計算エラー：${e.message}` });
+    const ng = inv.filter((x) => !x.warn);
+    return item('CHK-00', '契約データの入力検証', ng.length ? NG : inv.length ? WARN : OK, ng.length ? `${ng.length}件の入力エラーがあります` : inv.length ? `${inv.length}件の確認事項` : 'すべての契約が入力ルールを満たし、契約番号は一意です', inv, '入力ルールの検査');
+  });
 
-  // CHK-04 消去の完全性
-  const ws = worksheet(gen, data.companies, pol, names, period);
-  const zero = new Set(MUST_BE_ZERO);
-  if (pol['POL-04'] === 'reclass') { zero.add('RENTAL_ASSET'); zero.add('RENTAL_ACC'); }
-  if (pol['POL-05'] === 'by_lessee_dept') zero.add('RENTAL_DEP');
-  const nz = ws.filter((r) => zero.has(r.acc) && r.consol !== 0).map((r) => ({ message: `${r.label}：連結後 ${fmt(r.consol)}` }));
-  out.push(item('CHK-04', '消去の完全性（連結後のグループ内残高・取引が0）', nz.length ? NG : OK, nz.length ? `${nz.length}科目で残高が残っています` : '使用権資産・リース負債・受取リース料・支払利息等はすべて0（個別欄はアプリの計算値。帳簿との一致は CHK-10）', nz, 'アプリ計算の個別残高に対する検査'));
+  safe('CHK-01', '仕訳の貸借一致', () => {
+    const unbal = gen.journals.filter((j) => j.lines.reduce((a, l) => a + l.amt, 0) !== 0).map((j) => ({ contract: j.contractId, message: `${j.tpl} ${j.title}：差額 ${fmt(j.lines.reduce((a, l) => a + l.amt, 0))}` }));
+    return item('CHK-01', '仕訳の貸借一致', unbal.length ? NG : OK, unbal.length ? `${unbal.length}本の仕訳で貸借が一致しません` : `${gen.journals.length}本すべて貸借一致`, unbal, '合計検査');
+  });
 
-  // CHK-05 期末残高からの独立組立
-  const d5 = [];
-  for (const r of gen.results) {
-    const expM = expectedFlowNet(r, pol, period);
-    const act = netOf(gen.journals, FLOW_TPLS, r.contract.id);
-    for (const d of diffMaps(expM, act)) d5.push({ contract: r.contract.id, message: `${ACCOUNTS[d.key.split('|')[0]]?.name || d.key}（${d.key.split('|')[1]}）：期待値 ${fmt(d.a)} ≠ 仕訳 ${fmt(d.b)}` });
-  }
-  out.push(item('CHK-05', '消去額の独立組立（期末残高・当期損益から期待値を作り仕訳と比較）', d5.length ? NG : OK, d5.length ? `${d5.length}件の差異` : '期末残高・当期の損益・前期末残高から独立に組み立てた消去額と、仕訳（月次の取消の集計）が科目・会社別に一致', d5, '別経路で組立'));
-
-  // CHK-06 期間の連続性
-  const cont = [];
-  for (const r of gen.results) {
-    const { sched, contract: c } = r;
-    const prev = period.start - 1;
-    const eo = eFromSchedule(sched, prev, pol);
-    for (const k of [c.lesseeCo, c.lessorCo]) {
-      const C = co[k];
-      const t = pol['POL-02'] === 'reverse' && C?.taxEffect !== false ? rateAt(C, prev, 'taxRate') : 0;
-      const n = pol['POL-01'] === 'allocate' ? rateAt(C, prev, 'nciRatio') : 0;
-      const dt = R((eo[k] || 0) * t);
-      const nci = R(((eo[k] || 0) - dt) * n);
-      if ((r.E.open[k] || 0) !== (eo[k] || 0)) cont.push({ contract: c.id, message: `${C?.name || k}：期首の純資産修正額 ${fmt(r.E.open[k])} ≠ 前期末残高から求めた額 ${fmt(eo[k])}` });
-      if ((r.DT.open[k] || 0) !== dt) cont.push({ contract: c.id, message: `${C?.name || k}：期首税効果 ${fmt(r.DT.open[k])} ≠ ${fmt(dt)}` });
-      if ((r.NCI.open[k] || 0) !== nci) cont.push({ contract: c.id, message: `${C?.name || k}：期首非支配株主持分 ${fmt(r.NCI.open[k])} ≠ ${fmt(nci)}` });
-    }
-  }
-  out.push(item('CHK-06', '期間の連続性（期首額＝前期末の残高・前期末の税率/持分比率から独立に計算した額）', cont.length ? NG : OK, cont.length ? `${cont.length}件の不一致` : '開始仕訳・期首税効果・期首非支配株主持分が前期末から独立に計算した額と一致', cont, '別経路で計算'));
-
-  // CHK-07 スケジュールの完結性と現在価値の独立再計算（年金現価の公式）
-  const sc = [];
-  for (const r of gen.results) {
-    const { sched, contract: c } = r;
-    const m = sched.meta;
-    if (m.model === 'offbalance') continue;
-    if (Math.abs(m.finalResidual || 0) > m.K) sc.push({ contract: c.id, message: `最終回の端数調整額 ${fmt(m.finalResidual)} が大きすぎます（支払回数 ${m.K}）` });
-    const rem = m.payments.filter((p) => p.month >= m.measStart);
-    const regular = rem.length && rem.every((p) => p.amount === rem[0].amount) && (rem[0].t - m.measStart) % m.f === 0;
-    const override = c.lessee.liabilityOverride !== null && c.lessee.liabilityOverride !== undefined && c.lessee.transition?.method !== 'cumulative';
-    if (regular && m.rp > 0) {
-      const k0 = (rem[0].t - m.measStart) / m.f;
-      const n = rem.length;
-      const L0calc = R(rem[0].amount * (1 - Math.pow(1 + m.rp, -n)) / m.rp * Math.pow(1 + m.rp, 1 - k0));
-      if (!override && Math.abs(L0calc - m.L0) > 1) sc.push({ contract: c.id, message: `当初リース負債：年金現価の公式 ${fmt(L0calc)} ≠ スケジュール ${fmt(m.L0)}` });
-      if (override && L0calc !== m.L0) sc.push({ contract: c.id, message: `取込値（借手の帳簿）${fmt(m.L0)} と再計算値 ${fmt(L0calc)} に差異 ${fmt(m.L0 - L0calc)}。割引率・支払条件を確認してください`, warn: true });
-    }
-    if (m.model === 'jgaap') {
-      const endRec = sched.byIndex(Math.min(period.end, m.lastIdx));
-      if (endRec && period.end >= m.measStart && period.end <= m.lastIdx && !endRec.lessee.term) {
-        const s0 = ymToIndex(c.commencement);
-        const months = c.lessee.depMonths || (s0 + c.termMonths - m.measStart);
-        const expAcc = R((m.C0 * Math.min(period.end - m.measStart + 1, months)) / months);
-        if (expAcc !== endRec.lessee.acc_end) sc.push({ contract: c.id, message: `減価償却累計額：取得原価 ${fmt(m.C0)} × 経過月数 ÷ 償却月数 ${months} ＝ ${fmt(expAcc)} ≠ スケジュール ${fmt(endRec.lessee.acc_end)}` });
-      }
-    }
-    const totInt = m.segments.reduce((a, x) => a + x.interest, 0);
-    const remTotal = rem.reduce((a, p) => a + p.amount, 0);
-    if (!c.terminationYm && totInt !== remTotal - m.L0) sc.push({ contract: c.id, message: `利息総額 ${fmt(totInt)} ≠ 支払総額 ${fmt(remTotal)} − 当初負債 ${fmt(m.L0)}` });
-  }
-  const scNg = sc.filter((x) => !x.warn);
-  out.push(item('CHK-07', 'スケジュールの完結性と現在価値の独立再計算（年金現価の公式）', scNg.length ? NG : sc.length ? WARN : OK, scNg.length ? `${scNg.length}件の不一致` : sc.length ? `${sc.length}件の確認事項` : '均等払の契約は年金現価の公式と一致、全契約で利息総額＝支払総額−当初負債', sc, '公式による再計算'));
-
-  // CHK-08 貸手資産の按分比率
-  const ratio = new Map();
-  for (const c of data.contracts) {
-    const r = c.lessor || {};
-    if (!(r.assetCost > 0) || !r.assetId) continue;
-    ratio.set(r.assetId, (ratio.get(r.assetId) || 0) + (r.ratio ?? 1));
-  }
-  const over = [...ratio.entries()].filter(([, v]) => v > 1 + 1e-9).map(([k, v]) => ({ message: `貸手資産 ${k}：按分比率合計 ${(v * 100).toFixed(1)}%（100%超）` }));
-  out.push(item('CHK-08', '貸手資産の按分比率（二重計上の防止）', over.length ? NG : OK, over.length ? '按分比率の合計が100%を超える資産があります' : 'すべての貸手資産で按分比率合計が100%以下', over, '入力の検査'));
-
-  // CHK-09 決算日の差異（POL-08）
-  const fy = [];
-  const parentFe = data.companies.find((x) => x.isParent)?.fyeMonth || 3;
-  if (pol['POL-08'] !== 'provisional') {
+  safe('CHK-02', '支払額・受取リース料の独立計算（契約条件 → 当期の金額）', () => {
+    const pay = [];
     for (const r of gen.results) {
       const c = r.contract;
-      for (const [who, code] of [['借手', c.lesseeCo], ['貸手', c.lessorCo]]) {
-        const fe = co[code]?.fyeMonth;
-        if (!fe || fe === parentFe) continue;
-        const gap = (parentFe - fe + 12) % 12;
-        const gapStart = period.end - gap + 1;
-        const ev = r.sched.months.filter((x) => x.m >= gapStart && x.m <= period.end && (x.lessee.commence || x.lessee.term));
-        fy.push({ contract: c.id, message: `${who}（${co[code]?.name}）は${fe}月決算。差異期間（${indexToJp(gapStart)}〜${indexToJp(period.end)}）${ev.length ? `に${ev.map((x) => (x.lessee.commence ? '開始' : '終了')).join('・')}があり、重要な不一致の調整を検討してください` : 'に新規・解約はありません'}`, warn: ev.length > 0 });
+      let expP = 0;
+      for (const [m, a] of paymentsFromTerms(c)) if (m >= period.start && m <= period.end) expP += a;
+      const schedP = r.sched.months.filter((x) => x.m >= period.start && x.m <= period.end).reduce((a, x) => a + (x.lessor.cash || 0), 0);
+      if (expP !== schedP) pay.push({ contract: c.id, message: `契約条件から求めた当期の支払 ${fmt(expP)} ≠ スケジュールの支払 ${fmt(schedP)}` });
+      let expI = 0;
+      for (const [m, v] of lessorIncomeFromTerms(c, R)) if (m >= period.start && m <= period.end) expI += v;
+      if (expI !== r.ps.inc) pay.push({ contract: c.id, message: `契約条件から求めた当期の受取リース料（定額法・貸手のリース期間・条件変更を反映）${fmt(expI)} ≠ スケジュール ${fmt(r.ps.inc)}` });
+    }
+    return item('CHK-02', '支払額・受取リース料の独立計算（契約条件 → 当期の金額）', pay.length ? NG : OK, pay.length ? `${pay.length}件の不一致` : '契約条件（回数・フリーレント・段階賃料・条件変更・解約・貸手のリース期間）から別実装で求めた支払額・貸手の定額収益と一致', pay, '別実装で再計算');
+  });
+
+  safe('CHK-03', '消去差額の恒等式（損益の累計＝残高の差＝仕訳の純資産修正額）とロールフォワード', () => {
+    const idt = [];
+    for (const r of gen.results) {
+      const { ps, sched, contract: c } = r;
+      if (sched.meta.model !== 'offbalance') {
+        const newL = ps.commence ? ps.commence.L0 : 0;
+        const tL = ps.term ? ps.term.L : 0;
+        const Lcalc = ps.open.L + newL + ps.remeasureL + ps.int + ps.accr - ps.pay - tL;
+        if (Lcalc !== ps.close.L) idt.push({ contract: c.id, message: `リース負債：期首 ${fmt(ps.open.L)} ＋新規 ${fmt(newL)} ＋再測定 ${fmt(ps.remeasureL)} ＋利息 ${fmt(ps.int + ps.accr)} −支払 ${fmt(ps.pay)} −取崩 ${fmt(tL)} ＝ ${fmt(Lcalc)} ≠ 期末 ${fmt(ps.close.L)}` });
+      }
+      let expL = 0, inc = 0, gain = 0, idcExp = 0, idcKeep = 0, transRE = 0;
+      for (const x of sched.months) {
+        if (x.m > period.end) break;
+        const le = x.lessee;
+        expL += (le.dep || 0) + (le.int || 0) + (le.cost || 0) + (!le.active ? x.lessor.cash : 0);
+        inc += x.lessor.inc || 0;
+        if (le.term) gain += le.term.gain || 0;
+        if (le.remeasure) gain += le.remeasure.gain || 0;
+        if (le.commence && le.commence.idc) idcExp += le.commence.idc;
+        if (le.commence && le.commence.retroAcc) transRE += le.commence.L0 - (le.commence.C0 - le.commence.retroAcc);
+        if (pol['POL-07'] === 'capitalize') {
+          idcKeep += le.idcDep || 0;
+          if (le.term && sched.meta.idc) idcKeep += sched.meta.idc - le.term.idcAcc;
+        }
+      }
+      const plEffect = expL - inc - gain - (pol['POL-07'] === 'capitalize' ? idcKeep : idcExp) + transRE;
+      const es = eFromSchedule(sched, period.end, pol);
+      const bs = (es[c.lesseeCo] || 0) + (es[c.lessorCo] || 0);
+      const E = (r.E.close[c.lesseeCo] || 0) + (r.E.close[c.lessorCo] || 0);
+      if (plEffect !== E || bs !== E) idt.push({ contract: c.id, message: `損益の累計 ${fmt(plEffect)}、残高の差 ${fmt(bs)}、仕訳の純資産修正額 ${fmt(E)} が一致しません` });
+      else idt.push({ contract: c.id, message: `一致：Σ借手費用 ${fmt(expL)} − Σ貸手収益 ${fmt(inc)} − 解約・条件変更損益 ${fmt(gain)}${pol['POL-07'] !== 'capitalize' && idcExp ? ` − 初期直接費用 ${fmt(idcExp)}` : ''}${transRE ? ` ＋ 適用時の累積的影響額 ${fmt(transRE)}` : ''} ＝ 残高の差 ＝ ${fmt(E)}`, ok: true });
+    }
+    const ng = idt.filter((x) => !x.ok);
+    return item('CHK-03', '消去差額の恒等式（損益の累計＝残高の差＝仕訳の純資産修正額）とロールフォワード', ng.length ? NG : OK, ng.length ? `${ng.length}件の不一致` : '全契約で3つの計算経路が一致', idt, 'スケジュールの損益・残高と仕訳の比較');
+  });
+
+  safe('CHK-04', '消去の完全性（連結後のグループ内残高・取引が0）', () => {
+    const ws = worksheet(gen, data.companies, pol, names, period);
+    const zero = new Set(MUST_BE_ZERO);
+    if (pol['POL-04'] === 'reclass') { zero.add('RENTAL_ASSET'); zero.add('RENTAL_ACC'); }
+    if (pol['POL-05'] === 'by_lessee_dept') zero.add('RENTAL_DEP');
+    const nz = ws.filter((r) => zero.has(r.acc) && r.consol !== 0).map((r) => ({ message: `${r.label}：連結後 ${fmt(r.consol)}` }));
+    return item('CHK-04', '消去の完全性（連結後のグループ内残高・取引が0）', nz.length ? NG : OK, nz.length ? `${nz.length}科目で残高が残っています` : '使用権資産・リース負債・受取リース料・支払利息等はすべて0（個別欄はアプリの計算値。帳簿との一致は CHK-10）', nz, 'アプリ計算の個別残高に対する検査');
+  });
+
+  safe('CHK-05', '消去額の独立組立（期末残高・当期損益から期待値を作り仕訳と比較）', () => {
+    const d5 = [];
+    for (const r of gen.results) {
+      const act = netOf(gen.journals, FLOW_TPLS, r.contract.id);
+      for (const d of diffMaps(expectedFlowNet(r, pol, period), act)) d5.push({ contract: r.contract.id, message: `${accName(d.key)}：期待値 ${fmt(d.a)} ≠ 仕訳 ${fmt(d.b)}` });
+    }
+    return item('CHK-05', '消去額の独立組立（期末残高・当期損益から期待値を作り仕訳と比較）', d5.length ? NG : OK, d5.length ? `${d5.length}件の差異` : '期末残高・当期の損益・前期末残高から独立に組み立てた消去額と、仕訳（月次の取消の集計）が科目・会社別に一致', d5, '別経路で組立');
+  });
+
+  safe('CHK-06', '期間の連続性（期首額＝前期末の残高・税率・持分比率から独立に計算した額）', () => {
+    const cont = [];
+    for (const r of gen.results) {
+      const { sched, contract: c } = r;
+      const prev = period.start - 1;
+      const eo = eFromSchedule(sched, prev, pol);
+      for (const k of [c.lesseeCo, c.lessorCo]) {
+        const C = co[k];
+        const ek = eo[k] || 0;
+        const dt = pol['POL-02'] === 'reverse' && C?.taxEffect !== false ? R(ek * rateIndep(C, prev, 'taxRate') * (ek > 0 ? (C.dtaRatio ?? 1) : 1)) : 0;
+        if ((r.E.open[k] || 0) !== ek) cont.push({ contract: c.id, message: `${C?.name || k}：期首の純資産修正額 ${fmt(r.E.open[k])} ≠ 前期末残高から求めた額 ${fmt(ek)}` });
+        if ((r.DT.open[k] || 0) !== dt) cont.push({ contract: c.id, message: `${C?.name || k}：期首税効果 ${fmt(r.DT.open[k])} ≠ ${fmt(dt)}` });
+      }
+      const n = nciExpected(sched, co, pol, prev, R);
+      if ((r.NCI.open[c.lesseeCo] || 0) !== n.N) cont.push({ contract: c.id, message: `期首非支配株主持分 ${fmt(r.NCI.open[c.lesseeCo])} ≠ 独立計算 ${fmt(n.N)}` });
+      if ((r.cap?.open || 0) !== n.cap) cont.push({ contract: c.id, message: `期首の持分変動累計（資本剰余金）${fmt(r.cap?.open)} ≠ 独立計算 ${fmt(n.cap)}` });
+      // 開始仕訳に資本剰余金（持分変動の累計）が引き継がれているか
+      if (pol['POL-03'] !== 'balance') {
+        const capLine = gen.journals.filter((j) => j.contractId === c.id && j.tpl === 'C-01N').flatMap((j) => j.lines).filter((l) => l.acc === 'CAP_SURPLUS').reduce((a, l) => a + l.amt, 0);
+        if (capLine !== n.cap) cont.push({ contract: c.id, message: `開始仕訳の資本剰余金 ${fmt(capLine)} ≠ 前期末までの持分変動累計 ${fmt(n.cap)}` });
       }
     }
-  }
-  const fyWarn = fy.filter((x) => x.warn);
-  out.push(item('CHK-09', '決算日の差異による不一致（POL-08）', fyWarn.length ? WARN : OK, pol['POL-08'] === 'provisional' ? '方針「仮決算」：全社を連結決算日で計算しています' : fyWarn.length ? `${fyWarn.length}件の調整候補` : fy.length ? '決算日の異なる会社はありますが、差異期間に新規・解約はありません' : '決算日の異なる会社はありません', fy, '差異期間のイベント検出'));
+    return item('CHK-06', '期間の連続性（期首額＝前期末の残高・税率・持分比率から独立に計算した額）', cont.length ? NG : OK, cont.length ? `${cont.length}件の不一致` : '開始仕訳・期首税効果・期首非支配株主持分・資本剰余金（持分変動）の引継ぎが独立計算と一致', cont, '別経路で計算');
+  });
 
-  // CHK-10 個別の帳簿残高（実績）との突合
-  const act = [];
-  const key = indexToYm(period.end);
-  const fullYear = period.end - period.start === 11;
-  let missing = 0;
-  for (const r of gen.results) {
-    const c = r.contract;
-    const live = r.ps.activeMonths > 0;
-    const a2 = (c.actuals || {})[key];
-    if (!a2) { if (live) { missing++; act.push({ contract: c.id, message: `${key} 末の実績が未入力です（未突合）`, warn: true }); } continue; }
-    const cl = r.ps.close;
-    const cmp = [['リース負債', a2.L, cl.L], ['使用権資産簿価', a2.rouNet, cl.cost - cl.acc]];
-    if (fullYear) cmp.push(['受取リース料（当期）', a2.inc, r.ps.inc]);
-    for (const [nm, book, app] of cmp) {
-      if (book === undefined || book === null || book === '') continue;
-      if (Number(book) !== app) act.push({ contract: c.id, message: `${nm}：個別帳簿 ${fmt(Number(book))} ／ アプリ計算 ${fmt(app)} ／ 差異 ${fmt(Number(book) - app)}` });
-      else act.push({ contract: c.id, message: `${nm}：一致（${fmt(app)}）`, ok: true });
+  safe('CHK-07', 'スケジュールの完結性と現在価値・償却累計額の独立再計算', () => {
+    const sc = [];
+    for (const r of gen.results) {
+      const { sched, contract: c } = r;
+      const m = sched.meta;
+      if (m.model === 'offbalance') continue;
+      if (Math.abs(m.finalResidual || 0) > m.K) sc.push({ contract: c.id, message: `最終回の端数調整額 ${fmt(m.finalResidual)} が大きすぎます（支払回数 ${m.K}）` });
+      for (const ph of m.phases) {
+        const rem = ph.rem;
+        const regular = rem.length && rem.every((p) => p.amount === rem[0].amount) && (rem[0].t - ph.start) % m.f === 0;
+        const override = ph.idx === 0 && m.measSource === 'none' && c.lessee.liabilityOverride !== null && c.lessee.liabilityOverride !== undefined;
+        if (regular && ph.rp > 0) {
+          const k0 = (rem[0].t - ph.start) / m.f;
+          const L0calc = R(rem[0].amount * (1 - Math.pow(1 + ph.rp, -rem.length)) / ph.rp * Math.pow(1 + ph.rp, 1 - k0));
+          const label = ph.idx === 0 ? '当初リース負債' : `条件変更後（${indexToJp(ph.start)}）の再測定額`;
+          if (!override && Math.abs(L0calc - ph.L0) > 1) sc.push({ contract: c.id, message: `${label}：年金現価の公式 ${fmt(L0calc)} ≠ スケジュール ${fmt(ph.L0)}` });
+          if (override && L0calc !== ph.L0) sc.push({ contract: c.id, message: `取込値（借手の帳簿）${fmt(ph.L0)} と再計算値 ${fmt(L0calc)} に差異 ${fmt(ph.L0 - L0calc)}。割引率・支払条件を確認してください`, warn: true });
+        }
+      }
+      if (m.model === 'jgaap' && !m.modifications.length) {
+        const endRec = sched.byIndex(Math.min(period.end, m.lastIdx));
+        if (endRec && period.end >= m.measStart && period.end <= m.lastIdx && !endRec.lessee.term) {
+          const s0 = ymToIndex(c.commencement);
+          const from = m.retro ? s0 : m.measStart;
+          const months = m.retro ? c.termMonths : c.lessee.depMonths || (s0 + c.termMonths - m.measStart);
+          const expAcc = R((m.C0 * Math.min(period.end - from + 1, months)) / months);
+          if (expAcc !== endRec.lessee.acc_end) sc.push({ contract: c.id, message: `減価償却累計額：取得原価 ${fmt(m.C0)} × 経過月数 ÷ 償却月数 ${months} ＝ ${fmt(expAcc)} ≠ スケジュール ${fmt(endRec.lessee.acc_end)}` });
+        }
+      }
+      if (!c.terminationYm && !m.modifications.length) {
+        const remTotal = m.phases[0].rem.reduce((a, p) => a + p.amount, 0);
+        if (m.totalInterest !== remTotal - m.L0) sc.push({ contract: c.id, message: `利息総額 ${fmt(m.totalInterest)} ≠ 支払総額 ${fmt(remTotal)} − 当初負債 ${fmt(m.L0)}` });
+      }
     }
-  }
-  const actNg = act.filter((x) => !x.ok && !x.warn);
-  out.push(item('CHK-10', '個別の帳簿残高（実績）との突合', actNg.length ? NG : missing ? WARN : OK, actNg.length ? `${actNg.length}件の差異。原因を調査し個社修正を検討してください` : missing ? `${missing}契約が未突合（実績未入力）。入力済みの契約は一致` : '有効な全契約で実績と一致', act, '外部（個別帳簿）との突合'));
+    const ng = sc.filter((x) => !x.warn);
+    return item('CHK-07', 'スケジュールの完結性と現在価値・償却累計額の独立再計算', ng.length ? NG : sc.length ? WARN : OK, ng.length ? `${ng.length}件の不一致` : sc.length ? `${sc.length}件の確認事項` : '当初・条件変更後のリース負債が年金現価の公式と一致、償却累計額・利息総額も一致', sc, '公式による再計算');
+  });
 
-  // CHK-11 税効果・非支配株主持分の期末残高検証
-  const tx = [];
-  for (const r of gen.results) {
-    const { sched, contract: c } = r;
-    const es = eFromSchedule(sched, period.end, pol);
-    const dtaNet = netOf(gen.journals, TAX_TPLS, c.id);
-    const nciNet = netOf(gen.journals, NCI_TPLS, c.id);
-    for (const k of [c.lesseeCo, c.lessorCo]) {
-      const C = co[k];
-      const t = pol['POL-02'] === 'reverse' && C?.taxEffect !== false ? rateAt(C, period.end, 'taxRate') : 0;
-      const n = pol['POL-01'] === 'allocate' ? rateAt(C, period.end, 'nciRatio') : 0;
-      const expDT = R((es[k] || 0) * t);
-      const expN = R(((es[k] || 0) - expDT) * n);
-      const gotDT = -(dtaNet.get(`DTA|${k}`) || 0);
-      const gotN = -(nciNet.get(`NCI|${k}`) || 0);
-      if (expDT !== gotDT) tx.push({ contract: c.id, message: `${C?.name || k}：期末の税効果取消額 期待値 ${fmt(expDT)}（残高 ${fmt(es[k])}×${(t * 100).toFixed(2)}%）≠ 仕訳累計 ${fmt(gotDT)}` });
-      if (expN !== gotN) tx.push({ contract: c.id, message: `${C?.name || k}：期末の非支配株主持分 期待値 ${fmt(expN)} ≠ 仕訳累計 ${fmt(gotN)}` });
+  safe('CHK-08', '貸手資産の按分比率（二重計上の防止）', () => {
+    const over = [];
+    const byAsset = new Map();
+    for (const r of gen.results) {
+      const c = r.contract, a = c.lessor || {};
+      if (!(a.assetCost > 0) || !a.assetId) continue;
+      (byAsset.get(a.assetId) || byAsset.set(a.assetId, []).get(a.assetId)).push({ c, start: r.sched.meta.start, end: r.sched.meta.lastIdx, ratio: a.ratio ?? 1, cost: a.assetCost });
     }
-  }
-  out.push(item('CHK-11', '税効果・非支配株主持分の期末残高検証（スケジュール残高×期末税率・持分比率）', tx.length ? NG : OK, tx.length ? `${tx.length}件の不一致` : '開始仕訳＋当期仕訳の累計が、期末残高から独立に計算した額と一致（符号・税率・比率の誤りを検出）', tx, '別経路で計算'));
-
-  // CHK-14 流動部分の独立計算（月次残高から：決算日後12か月以内の最終支払直後の残高との差）
-  const cp = [];
-  for (const r of gen.results) {
-    const { sched, contract: c } = r;
-    if (sched.meta.model === 'offbalance') continue;
-    const endRec = sched.byIndex(period.end);
-    if (!endRec || !endRec.lessee.active || endRec.lessee.term) continue;
-    const pays = paymentsFromTerms({ ...c, terminationYm: null });
-    let last = null;
-    for (let mm = period.end + 1; mm <= period.end + 12; mm++) if (pays.has(mm)) last = mm;
-    if (last !== null && (last > sched.meta.lastIdx || (c.terminationYm && last >= sched.meta.lastIdx))) continue; // 解約月以降は月次残高がないため独立計算の対象外
-    let expCur = 0;
-    if (last !== null) {
-      const after = c.timing === 'advance'
-        ? (sched.byIndex(last - 1)?.lessee.L_end || 0) - pays.get(last)
-        : sched.byIndex(last)?.lessee.L_end || 0;
-      expCur = endRec.lessee.L_end - after;
+    for (const [id, list] of byAsset) {
+      if (new Set(list.map((x) => x.cost)).size > 1) over.push({ message: `貸手資産 ${id}：契約によって取得原価が異なります（${list.map((x) => `${x.c.id}=${fmt(x.cost)}`).join('、')}）` });
+      // 選択中の期間の各月で、同時に有効な契約の按分比率の合計を確認
+      for (let m = period.start; m <= period.end; m++) {
+        const sum = list.filter((x) => x.start <= m && m <= x.end).reduce((a, x) => a + x.ratio, 0);
+        if (sum > 1 + 1e-9) { over.push({ message: `貸手資産 ${id}：${indexToJp(m)} に同時に有効な契約の按分比率合計 ${(sum * 100).toFixed(1)}%（100%超）` }); break; }
+      }
     }
-    // C-10 の流動側を直接集計する
-    const c10 = gen.journals.filter((j) => j.tpl === 'C-10' && j.contractId === c.id).flatMap((j) => j.lines).filter((l) => l.acc === 'LL_C').reduce((a, l) => a + l.amt, 0);
-    if (c10 !== expCur) cp.push({ contract: c.id, message: `流動部分：月次残高から ${fmt(expCur)}（${last !== null ? `${indexToJp(last)}の支払直後の残高との差` : '1年以内の支払なし'}）≠ 仕訳 ${fmt(c10)}` });
-  }
-  out.push(item('CHK-14', 'リース負債の流動部分の独立計算（決算日後1年以内）', cp.length ? NG : OK, cp.length ? `${cp.length}契約で不一致` : '月次の残高推移から独立に求めた流動部分と C-10 の金額が一致', cp, '別経路で計算'));
+    return item('CHK-08', '貸手資産の按分比率（二重計上の防止）', over.length ? NG : OK, over.length ? '按分比率・取得原価に問題のある資産があります' : '同時に有効な契約の按分比率合計はすべて100%以下、取得原価も一致', over, '入力の検査');
+  });
 
-  // CHK-12 棚卸資産等への原価算入（POL-12）
-  const note12 = (data.checkNotes || {})['CHK-12'];
-  const mfg = data.contracts.filter((c) => c.lessee?.dept === 'mfg').map((c) => ({ contract: c.id, message: `${c.name}：借手は製造部門で使用。期末在庫に含まれる償却費の重要性を確認してください`, warn: !note12 }));
-  out.push(item('CHK-12', '棚卸資産に含まれる償却費（POL-12）', mfg.length && !note12 ? WARN : OK, mfg.length ? (note12 ? `判断を記録済み：${note12}` : `${mfg.length}契約が製造部門で使用（方針：${pol['POL-12'] === 'manual' ? '手入力で調整' : '調整しない'}）。重要性の判断を記録してください`) : '製造部門で使用する契約はありません', mfg, '判断の記録'));
+  safe('CHK-09', '決算日の差異による不一致（POL-08）', () => {
+    const fy = [];
+    const parentFe = data.companies.find((x) => x.isParent)?.fyeMonth || 3;
+    if (pol['POL-08'] !== 'provisional') {
+      for (const r of gen.results) {
+        const c = r.contract;
+        for (const [who, code] of [['借手', c.lesseeCo], ['貸手', c.lessorCo]]) {
+          const fe = co[code]?.fyeMonth;
+          if (!fe || fe === parentFe) continue;
+          const gap = (parentFe - fe + 12) % 12;
+          const gapStart = period.end - gap + 1;
+          const ev = r.sched.months.filter((x) => x.m >= gapStart && x.m <= period.end && (x.lessee.commence || x.lessee.term || x.lessee.remeasure));
+          fy.push({ contract: c.id, message: `${who}（${co[code]?.name}）は${fe}月決算。差異期間（${indexToJp(gapStart)}〜${indexToJp(period.end)}）${ev.length ? `に${ev.map((x) => (x.lessee.commence ? '開始' : x.lessee.remeasure ? '条件変更' : '終了')).join('・')}があり、重要な不一致の調整を検討してください` : 'に新規・解約・条件変更はありません'}`, warn: ev.length > 0 });
+        }
+      }
+    }
+    const w = fy.filter((x) => x.warn);
+    return item('CHK-09', '決算日の差異による不一致（POL-08）', w.length ? WARN : OK, pol['POL-08'] === 'provisional' ? '方針「仮決算」：全社を連結決算日で計算しています' : w.length ? `${w.length}件の調整候補` : fy.length ? '決算日の異なる会社はありますが、差異期間に新規・解約・条件変更はありません' : '決算日の異なる会社はありません', fy, '差異期間のイベント検出');
+  });
 
-  // CHK-13 確定済み期間の再現性
-  const lk = [];
-  if (!opts.skipLocks) {
-    for (const l of data.locks || []) {
+  safe('CHK-10', '個別の帳簿残高（実績）との突合', () => {
+    const act = [];
+    const key = indexToYm(period.end);
+    const fullYear = period.end - period.start === 11;
+    let missing = 0;
+    for (const r of gen.results) {
+      const c = r.contract;
+      const a2 = (c.actuals || {})[key];
+      if (!a2) { if (r.ps.activeMonths > 0) { missing++; act.push({ contract: c.id, message: `${key} 末の実績が未入力です（未突合）`, warn: true }); } continue; }
+      const cl = r.ps.close;
+      const cmp = [['リース負債', a2.L, cl.L], ['使用権資産簿価', a2.rouNet, cl.cost - cl.acc], ['リース負債のうち流動', a2.cur, r.cur], ['貸手の未収リース料', a2.R, cl.R]];
+      if (fullYear) cmp.push(['受取リース料（年度）', a2.inc, r.ps.inc]);
+      else if (period.fyEnd === period.end) cmp.push(['受取リース料（年度）', a2.inc, periodSummary(r.sched, period.end - 11, period.end).inc]);
+      for (const [nm, book, app] of cmp) {
+        if (book === undefined || book === null || book === '') continue;
+        if (Number(book) !== app) act.push({ contract: c.id, message: `${nm}：個別帳簿 ${fmt(Number(book))} ／ アプリ計算 ${fmt(app)} ／ 差異 ${fmt(Number(book) - app)}` });
+        else act.push({ contract: c.id, message: `${nm}：一致（${fmt(app)}）`, ok: true });
+      }
+    }
+    const ng = act.filter((x) => !x.ok && !x.warn);
+    return item('CHK-10', '個別の帳簿残高（実績）との突合', ng.length ? NG : missing ? WARN : OK, ng.length ? `${ng.length}件の差異。原因を調査し個社修正を検討してください` : missing ? `${missing}契約が未突合（実績未入力）。入力済みの契約は一致` : '有効な全契約で実績と一致', act, '外部（個別帳簿）との突合');
+  });
+
+  safe('CHK-11', '税効果・非支配株主持分・資本剰余金の期末残高検証', () => {
+    const tx = [];
+    for (const r of gen.results) {
+      const { sched, contract: c } = r;
+      const es = eFromSchedule(sched, period.end, pol);
+      const dtaNet = netOf(gen.journals, TAX_TPLS, c.id);
+      const nciNet = netOf(gen.journals, NCI_TPLS, c.id);
+      for (const k of [c.lesseeCo, c.lessorCo]) {
+        const C = co[k];
+        const ek = es[k] || 0;
+        const t = pol['POL-02'] === 'reverse' && C?.taxEffect !== false ? rateIndep(C, period.end, 'taxRate') : 0;
+        const expDT = R(ek * t * (ek > 0 ? (C?.dtaRatio ?? 1) : 1));
+        const gotDT = -(dtaNet.get(`DTA|${k}`) || 0);
+        if (expDT !== gotDT) tx.push({ contract: c.id, message: `${C?.name || k}：期末の税効果取消額 期待値 ${fmt(expDT)}（残高 ${fmt(ek)}×${(t * 100).toFixed(2)}%）≠ 仕訳累計 ${fmt(gotDT)}` });
+      }
+      const n = nciExpected(sched, co, pol, period.end, R);
+      const gotN = -(nciNet.get(`NCI|${c.lesseeCo}`) || 0);
+      const gotCap = nciNet.get(`CAP_SURPLUS|${c.lesseeCo}`) || 0;
+      if (n.N !== gotN) tx.push({ contract: c.id, message: `期末の非支配株主持分 期待値 ${fmt(n.N)}（基礎＝借手・貸手の税効果後修正額の合計 × 借手の比率）≠ 仕訳累計 ${fmt(gotN)}` });
+      if (n.cap !== gotCap) tx.push({ contract: c.id, message: `持分変動（資本剰余金）の累計 期待値 ${fmt(n.cap)} ≠ 仕訳累計 ${fmt(gotCap)}` });
+    }
+    return item('CHK-11', '税効果・非支配株主持分・資本剰余金の期末残高検証', tx.length ? NG : OK, tx.length ? `${tx.length}件の不一致` : '開始仕訳＋当期仕訳の累計が、期末残高・期末税率・持分比率の推移から独立に計算した額と一致', tx, '別経路で計算');
+  });
+
+  safe('CHK-14', 'リース負債の流動部分の独立計算（決算日後1年以内）', () => {
+    const cp = [];
+    for (const r of gen.results) {
+      const { sched, contract: c } = r;
+      if (sched.meta.model === 'offbalance') continue;
+      const endRec = sched.byIndex(period.end);
+      if (!endRec || !endRec.lessee.active || endRec.lessee.term) continue;
+      // 決算日時点で有効な契約条件（それ以降の条件変更は未知）で判定
+      const known = { ...c, terminationYm: null, modifications: sortedMods(c).filter((x) => ymToIndex(x.ym) <= period.end) };
+      const pays = paymentsFromTerms(known, true);
+      let last = null;
+      for (let mm = period.end + 1; mm <= period.end + 12; mm++) if (pays.has(mm)) last = mm;
+      if (last !== null && (last > sched.meta.lastIdx || (c.terminationYm && last >= sched.meta.lastIdx))) continue;
+      if (last !== null && sortedMods(c).some((x) => { const t = ymToIndex(x.ym); return t > period.end && t <= last; })) continue; // 1年以内に条件変更があると月次残高が変わるため対象外
+      let expCur = 0;
+      if (last !== null) {
+        const after = c.timing === 'advance' ? (sched.byIndex(last - 1)?.lessee.L_end || 0) - pays.get(last) : sched.byIndex(last)?.lessee.L_end || 0;
+        expCur = endRec.lessee.L_end - after;
+      }
+      const c10 = gen.journals.filter((j) => j.tpl === 'C-10' && j.contractId === c.id).flatMap((j) => j.lines).filter((l) => l.acc === 'LL_C').reduce((a, l) => a + l.amt, 0);
+      if (c10 !== expCur) cp.push({ contract: c.id, message: `流動部分：月次残高から ${fmt(expCur)}（${last !== null ? `${indexToJp(last)}の支払直後の残高との差` : '1年以内の支払なし'}）≠ 仕訳 ${fmt(c10)}` });
+    }
+    return item('CHK-14', 'リース負債の流動部分の独立計算（決算日後1年以内）', cp.length ? NG : OK, cp.length ? `${cp.length}契約で不一致` : '月次の残高推移から独立に求めた流動部分と C-10 の金額が一致', cp, '別経路で計算');
+  });
+
+  safe('CHK-15', '償却・定額費用の独立計算（貸手資産・初期直接費用・ASC842/簡便法の費用）', () => {
+    const rows = [];
+    for (const r of gen.results) {
+      const { sched, contract: c } = r;
+      const m = sched.meta;
+      const a = c.lessor || {};
+      const endRec = sched.byIndex(Math.min(period.end, m.lastIdx));
+      if (endRec && period.end <= m.lastIdx) {
+        if (a.assetCost > 0 && c.assetClass !== 'land' && a.assetLifeMonths > 0) {
+          const k = Math.min(Math.max(period.end - ymToIndex(a.assetStart) + 1, 0), a.assetLifeMonths);
+          const exp = R((a.assetCost * k) / a.assetLifeMonths);
+          if (exp !== endRec.lessor.assetAcc_end) rows.push({ contract: c.id, message: `貸手資産の償却累計額：${fmt(a.assetCost)}×${k}/${a.assetLifeMonths} ＝ ${fmt(exp)} ≠ スケジュール ${fmt(endRec.lessor.assetAcc_end)}` });
+        }
+        if (m.idc && endRec.lessee.active && !endRec.lessee.term) {
+          const k = Math.min(period.end - m.measStart + 1, m.depMonths);
+          const exp = R((m.idc * k) / m.depMonths);
+          if (exp !== endRec.lessee.idcAcc_end) rows.push({ contract: c.id, message: `初期直接費用の償却累計額：${fmt(exp)} ≠ スケジュール ${fmt(endRec.lessee.idcAcc_end)}` });
+        }
+      }
+      if ((m.model === 'asc842ol' || m.model === 'offbalance') && !m.modifications.length && !c.terminationYm) {
+        const s0 = ymToIndex(c.commencement);
+        const total = [...paymentsFromTerms(c)].reduce((x, [, v]) => x + v, 0);
+        const cum = (idx) => (idx < s0 ? 0 : R((total * Math.min(idx - s0 + 1, c.termMonths)) / c.termMonths));
+        const exp = cum(period.end) - cum(period.start - 1);
+        if (exp !== r.ps.cost) rows.push({ contract: c.id, message: `定額のリース費用：総額 ${fmt(total)} × 経過月数 ÷ ${c.termMonths} による当期額 ${fmt(exp)} ≠ スケジュール ${fmt(r.ps.cost)}` });
+      }
+    }
+    return item('CHK-15', '償却・定額費用の独立計算（貸手資産・初期直接費用・ASC842/簡便法の費用）', rows.length ? NG : OK, rows.length ? `${rows.length}件の不一致` : '契約条件から別に計算した償却累計額・定額費用と一致', rows, '別実装で再計算');
+  });
+
+  safe('CHK-16', '連結CF消去額の検証（支払＝受取、元本＋利息＝支払）', () => {
+    const rows = [];
+    const cf = cashFlowEliminations(gen, pol, period);
+    let pays = 0;
+    for (const r of gen.results) for (const [m, a] of paymentsFromTerms(r.contract)) if (m >= period.start && m <= period.end) pays += a;
+    const t = cf.totals;
+    if (t.receipts !== pays) rows.push({ message: `貸手の受取 ${fmt(t.receipts)} ≠ 契約条件の支払 ${fmt(pays)}` });
+    if (t.repay + t.interestPaid + t.opLease !== pays) rows.push({ message: `借手の元本返済 ${fmt(t.repay)}＋利息 ${fmt(t.interestPaid)}＋その他 ${fmt(t.opLease)} ≠ 支払 ${fmt(pays)}` });
+    // 利息の支払額＝当期の支払利息＋期首の未払利息−期末の未払利息（未払利息は直前の支払以降の月次利息の累計）
+    let expInt = 0;
+    for (const r of gen.results) {
+      const { sched, contract: c } = r;
+      if (sched.meta.model !== 'jgaap') continue;
+      const p = paymentsFromTerms(c);
+      const accruedAt = (idx) => {
+        let acc = 0;
+        for (let m = idx; m >= sched.meta.measStart; m--) {
+          const x = sched.byIndex(m);
+          if (!x) break;
+          if (c.timing !== 'advance' && p.has(m)) break;
+          acc += x.lessee.int || 0;
+          if (c.timing === 'advance' && p.has(m)) break;
+        }
+        return acc;
+      };
+      const intP = sched.months.filter((x) => x.m >= period.start && x.m <= period.end).reduce((a, x) => a + (x.lessee.int || 0), 0);
+      const term = sched.months.find((x) => x.m >= period.start && x.m <= period.end && x.lessee.term);
+      const endAcc = term ? 0 : accruedAt(period.end);
+      const termAcc = term ? accruedAt(term.m) : 0; // 解約時の未払利息は支払われず負債とともに取り崩される
+      expInt += intP + accruedAt(period.start - 1) - endAcc - termAcc;
+    }
+    if (expInt !== t.interestPaid) rows.push({ message: `利息の支払額：支払利息＋期首未払利息−期末未払利息 ${fmt(expInt)} ≠ CF消去額 ${fmt(t.interestPaid)}` });
+    return item('CHK-16', '連結CF消去額の検証（支払＝受取、元本＋利息＝支払）', rows.length ? NG : OK, rows.length ? `${rows.length}件の不一致` : '借手の支払・貸手の受取が契約条件の支払と一致し、利息の支払額も未払利息の増減から独立に計算した額と一致', rows, '別経路で計算');
+  });
+
+  safe('CHK-12', '棚卸資産に含まれる償却費（POL-12）', () => {
+    const note12 = (data.checkNotes || {})['CHK-12'];
+    const mfg = data.contracts.filter((c) => c.lessee?.dept === 'mfg').map((c) => ({ contract: c.id, message: `${c.name}：借手は製造部門で使用。期末在庫に含まれる償却費の重要性を確認してください`, warn: !note12 }));
+    return item('CHK-12', '棚卸資産に含まれる償却費（POL-12）', mfg.length && !note12 ? WARN : OK, mfg.length ? (note12 ? `判断を記録済み：${note12}` : `${mfg.length}契約が製造部門で使用（方針：${pol['POL-12'] === 'manual' ? '手入力で調整' : '調整しない'}）。重要性の判断を記録してください`) : '製造部門で使用する契約はありません', mfg, '判断の記録');
+  });
+
+  safe('CHK-13', '確定済み期間の再現性（確定時のスナップショットと現在の再計算の一致）', () => {
+    const lk = [];
+    const cache = opts.lockCache;
+    for (const l of opts.skipLocks ? [] : data.locks || []) {
       const p = { start: ymToIndex(l.periodStart), end: ymToIndex(l.periodEnd), label: l.label };
-      const g = generateAll(data, p, pol, { schedCache: opts.schedCache });
-      const nets = snapshotNets(g);
+      const key = `${l.periodStart}|${l.periodEnd}`;
+      let nets = cache?.get(key);
+      if (!nets) {
+        nets = snapshotNets(generateAll(data, p, pol, { schedCache: opts.schedCache }), pol, names);
+        cache?.set(key, nets);
+      }
       for (const cid of new Set([...Object.keys(l.snapshot), ...Object.keys(nets)])) {
         const a = new Map(Object.entries(l.snapshot[cid]?.nets || {}));
         const b = new Map(Object.entries(nets[cid]?.nets || {}));
         for (const d of diffMaps(a, b)) lk.push({ contract: cid, message: `${l.label}：${d.key} 確定時 ${fmt(d.a)} → 現在 ${fmt(d.b)}` });
       }
+      if (l.policies) {
+        const changed = Object.keys(l.policies).filter((k) => l.policies[k] !== pol[k]);
+        if (changed.length) lk.push({ contract: '—', message: `${l.label}：確定時から会計方針が変更されています（${changed.join('、')}）`, warn: true });
+      }
     }
-  }
-  out.push(item('CHK-13', '確定済み期間の再現性（確定時のスナップショットと現在の再計算の一致）', lk.length ? NG : OK, lk.length ? `確定済み期間の数値が ${lk.length}件変わっています。マスタ・方針の変更を取り消すか、理由を記録して確定を解除してください` : (data.locks || []).length ? `確定済み ${(data.locks || []).length} 期間すべてで再計算結果が確定時と一致` : '確定済みの期間はありません', lk, '確定値との比較'));
+    const ng = lk.filter((x) => !x.warn);
+    return item('CHK-13', '確定済み期間の再現性（確定時のスナップショットと現在の再計算の一致）', ng.length ? NG : lk.length ? WARN : OK, ng.length ? `確定済み期間の数値・表示科目が ${ng.length}件変わっています。変更を取り消すか、理由を記録して確定を解除してください` : lk.length ? '数値は一致していますが、確定時から会計方針が変更されています' : (data.locks || []).length ? `確定済み ${(data.locks || []).length} 期間すべてで再計算結果が確定時と一致` : '確定済みの期間はありません', lk, '確定値との比較');
+  });
 
-  return out;
+  const order = ['CHK-00', 'CHK-01', 'CHK-02', 'CHK-03', 'CHK-04', 'CHK-05', 'CHK-06', 'CHK-07', 'CHK-08', 'CHK-09', 'CHK-10', 'CHK-11', 'CHK-14', 'CHK-15', 'CHK-16', 'CHK-12', 'CHK-13'];
+  return out.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
 }
 
-/** 期間確定用：契約別・科目|会社別の仕訳純額 */
-export function snapshotNets(gen) {
-  const out = {};
+/** 期間確定用：契約別・「表示科目名|会社」別の仕訳純額（手入力仕訳は仕訳ID単位） */
+export function snapshotNets(gen, pol = {}, names = {}) {
+  const out = Object.create(null);
   for (const j of gen.journals) {
-    const cid = j.contractId || '—';
-    out[cid] ||= { nets: {} };
+    const cid = j.manual ? `手入力:${j.id}` : j.contractId || '—';
+    if (!out[cid]) out[cid] = { nets: Object.create(null) };
     for (const l of j.lines) {
-      const k = `${l.acc}|${l.co}`;
+      const k = `${j.kind === 'IND' ? '[個社]' : ''}${accountLabel(l, pol, names)}|${l.co}`;
       out[cid].nets[k] = (out[cid].nets[k] || 0) + l.amt;
     }
   }

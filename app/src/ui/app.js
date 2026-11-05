@@ -32,7 +32,14 @@ export function parentFye(data) {
 }
 
 /** 計算（画面描画のたびに実行。契約数千件規模までを想定） */
+let memo = { key: null, ctx: null };
+const lockCache = new Map();
+let lockCacheVersion = -1;
+
 export function compute() {
+  const memoKey = `${state.version}|${state.ui.granularity}|${state.ui.periodIndex}`;
+  if (memo.key === memoKey) return memo.ctx;
+  if (lockCacheVersion !== state.version) { lockCache.clear(); lockCacheVersion = state.version; }
   const d = state.data;
   const pol = state.policies;
   const fye = parentFye(d);
@@ -51,12 +58,14 @@ export function compute() {
   const period = periods[idx];
   const schedCache = new Map();
   for (const c of d.contracts) {
-    try { schedCache.set(c.id, buildSchedule(c, pol)); } catch { /* 入力エラーは検算で表示 */ }
+    try { schedCache.set(c.id, buildSchedule(c, pol, { lesseeCompany: d.companies.find((x) => x.code === c.lesseeCo) })); } catch { /* 入力エラーは検算で表示 */ }
   }
   const gen = generateAll(d, period, pol, { schedCache });
   const names = d.config.accountNames || {};
-  const checks = runChecks(d, period, pol, gen, names, { schedCache });
-  return { data: d, pol, periods, yearPeriods, period, periodIndex: idx, gen, checks, names, schedCache, companies: d.companies, unit: d.config.unit || '' , status: overallStatus(checks) };
+  const checks = runChecks(d, period, pol, gen, names, { schedCache, lockCache });
+  const ctx = { data: d, pol, periods, yearPeriods, period, periodIndex: idx, gen, checks, names, schedCache, companies: d.companies, unit: d.config.unit || '', status: overallStatus(checks) };
+  memo = { key: memoKey, ctx };
+  return ctx;
 }
 
 function currentPage() {
@@ -71,7 +80,12 @@ function render() {
   try {
     ctx = compute();
   } catch (e) {
-    clear(root).append(h('div', { class: 'error' }, `計算中にエラーが発生しました：${e.message}`));
+    // 計算できなくてもメニューとデータ管理は使えるようにする（データの書き出し・修正のため）
+    const navE = h('nav', { class: 'nav', 'aria-label': '画面' }, PAGES.map((p) => h('a', { href: `#/${p.id}` }, p.label)));
+    const body = h('main', { class: 'main' }, h('div', { class: 'error' }, `計算中にエラーが発生しました：${e.message}。「データ管理」でデータを書き出すか、サンプルデータに戻してください。`));
+    if (page.id === 'data') { try { body.append(renderData({ data: state.data })); } catch (e2) { body.append(h('div', { class: 'error' }, e2.message)); } }
+    clear(root).append(navE, body);
+    console.error(e);
     return;
   }
   const nav = h('nav', { class: 'nav', 'aria-label': '画面' }, PAGES.map((p) => h('a', { href: `#/${p.id}`, class: p.id === page.id ? 'active' : '', 'aria-current': p.id === page.id ? 'page' : null }, p.label)));
@@ -97,7 +111,11 @@ function render() {
     main.append(h('div', { class: 'error' }, `画面の表示中にエラーが発生しました：${e.message}`));
     console.error(e);
   }
-  const warn = state.storageOk ? null : h('div', { class: 'banner' }, 'この環境ではブラウザ保存が使えないため、変更は再読み込みで失われます。「データ管理」からJSONで保存してください。');
+  const warns = [];
+  if (!state.storageOk) warns.push(h('div', { class: 'banner' }, 'この環境ではブラウザ保存が使えないため、変更は再読み込みで失われます。「データ管理」からJSONで保存してください。'));
+  if (state.loadError) warns.push(h('div', { class: 'banner' }, state.loadError));
+  if (state.loadWarnings.length) warns.push(h('div', { class: 'banner' }, `保存データの読込時に自動修正しました：${state.loadWarnings.slice(0, 3).join('／')}${state.loadWarnings.length > 3 ? ` ほか${state.loadWarnings.length - 3}件` : ''}`));
+  const warn = warns.length ? h('div', null, ...warns) : null;
   const scrollY = window.scrollY;
   clear(root).append(header, nav, warn || '', main);
   if (render.lastPage === page.id) window.scrollTo(0, scrollY);

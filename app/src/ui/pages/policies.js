@@ -6,6 +6,7 @@ import { POLICIES, defaultPolicies } from '../../engine/policies.js';
 import { generateAll } from '../../engine/elimination.js';
 import { buildSchedule } from '../../engine/schedule.js';
 import { cashFlowEliminations, worksheet } from '../../engine/reports.js';
+import { plSection, accountLabel } from '../../engine/accounts.js';
 import { buildPeriods, ymToIndex } from '../../engine/util.js';
 
 /** 設例用のデータ（親会社P→60%子会社S、5年・年1回後払1,000、割引率3%） */
@@ -59,7 +60,15 @@ function impactTable(def, ctx) {
     const tax = g.results.reduce((a, r) => a + sum(r.DT.close) - sum(r.DT.open), 0);
     const nci = g.results.reduce((a, r) => a + sum(r.NCI.close) - sum(r.NCI.open), 0);
     const eq = g.results.reduce((a, r) => a + sum(r.E.close) - sum(r.DT.close), 0);
-    return { label: o.label, cur: o.value === state.policies[def.id], pre, tax, parent: pre - tax - nci, nci, eq, n: g.journals.length };
+    // 連結損益計算書の区分別・連結貸借対照表の表示科目別の連結後金額（グループ内リース関連）
+    const ws = worksheet(g, data.companies, pol, ctx.names, period);
+    const sec = {};
+    const bs = {};
+    for (const w of ws) {
+      if (w.type === 'PL') { const k = plSection({ acc: w.acc, meta: w.meta || {} }) || 'その他'; sec[k] = (sec[k] || 0) - w.consol; }
+      else if (w.consol) bs[w.label] = (bs[w.label] || 0) + w.consol;
+    }
+    return { label: o.label, cur: o.value === state.policies[def.id], pre, tax, parent: pre - tax - nci, nci, eq, n: g.journals.length, sec, bs };
   });
   const base = rows.find((r) => r.cur);
   return h('div', { class: 'impact' },
@@ -72,7 +81,15 @@ function impactTable(def, ctx) {
       { label: '期末の純資産への影響（税引後）', key: 'eq', num: true },
       { label: '選択中との差（親会社株主帰属）', num: true, render: (r) => r.parent - base.parent },
       { label: '仕訳本数', key: 'n', num: true },
-    ], rows, { className: 'compact' }));
+    ], rows, { className: 'compact' }),
+    h('div', { class: 'sub-title' }, '連結財務諸表の表示への影響（グループ内リース関連の連結後金額）'),
+    (() => {
+      const secs = [...new Set(rows.flatMap((r) => Object.keys(r.sec)))];
+      const bsKeys = [...new Set(rows.flatMap((r) => Object.keys(r.bs)))];
+      const data2 = [...secs.map((k) => ({ item: `損益：${k}（＋は利益の増加）`, v: rows.map((r) => r.sec[k] || 0) })), ...bsKeys.map((k) => ({ item: `貸借：${k}`, v: rows.map((r) => r.bs[k] || 0) }))].filter((x) => x.v.some((v) => v !== x.v[0]) || ['POL-04', 'POL-05', 'POL-06'].includes(def.id));
+      if (!data2.length) return h('p', { class: 'muted small' }, '表示区分の違いはありません（損益の金額のみが異なる論点です）');
+      return table([{ label: '項目', key: 'item' }, ...rows.map((r, i) => ({ label: r.label.slice(0, 18), num: true, render: (x) => x.v[i] }))], data2, { className: 'compact' });
+    })());
 }
 
 /** 開いたときに初めて計算する折りたたみ（画面の初期表示を速くする） */

@@ -2,7 +2,7 @@ import { h, card, table, field, select, statusBadge, toast, amt } from '../dom.j
 import { COLORS, emptyState } from '../components.js';
 import { gantt, barChart, lineChart } from '../charts.js';
 import { state, update, setUi } from '../store.js';
-import { validateContract, currentPortion } from '../../engine/schedule.js';
+import { validateContract, currentPortion, periodSummary } from '../../engine/schedule.js';
 import { sanitizeContract } from '../../engine/data.js';
 import { contractYearly, eFromSchedule } from '../../engine/reports.js';
 import { ASSET_CLASSES, LESSEE_DEPT } from '../../engine/accounts.js';
@@ -105,30 +105,50 @@ function renderDetail(c, ctx) {
       { label: '貸手の未収', num: true, render: (x) => x.lessor.R_end },
       { label: 'イベント', render: (x) => (x.lessee.commence ? '開始' : '') + (x.lessee.term ? (x.lessee.term.kind === 'termination' ? '中途解約' : '満了') : '') },
     ], sc.months, { className: 'compact' }))));
-    parts.push(actualsCard(c, yr));
+    parts.push(actualsCard(c, sc, ctx.periods));
   }
   parts.push(editor(c, data));
   return h('div', { class: 'detail' }, ...parts);
 }
 
-function actualsCard(c, yr) {
+function actualsCard(c, sc, periods) {
   const draft = deepClone(c.actuals || {});
-  const rows = yr.map((r) => {
-    const key = indexToYm(r.end);
-    const a = draft[key] || {};
-    const inp = (f) => h('input', { type: 'number', step: 'any', value: a[f] ?? '', 'aria-label': `${r.label} ${f}`, on: { input: (e) => { draft[key] = draft[key] || {}; if (e.target.value === '') delete draft[key][f]; else draft[key][f] = Number(e.target.value); } } });
-    const diff = (book, app) => (book === undefined || book === null ? h('td', { class: 'muted' }, '—') : Number(book) === app ? h('td', null, statusBadge('ok', '一致')) : h('td', null, statusBadge('ng', `差異 ${fmt(Number(book) - app)}`)));
-    return h('tr', null, h('td', null, r.label),
-      h('td', null, inp('L')), amt(r.closeL), diff(a.L, r.closeL),
-      h('td', null, inp('rouNet')), amt(r.rouNet), diff(a.rouNet, r.rouNet),
-      h('td', null, inp('inc')), amt(r.inc), diff(a.inc, r.inc));
+  const rowsData = periods.filter((p) => sc.months.some((x) => x.m >= p.start && x.m <= p.end && x.lessee.active)).map((p) => {
+    const ps = periodSummary(sc, p.start, p.end);
+    const fyEndRow = p.end === p.fyEnd;
+    return { p, key: indexToYm(p.end), L: ps.close.L, rouNet: ps.close.cost - ps.close.acc, cur: currentPortion(sc, p.end), R: ps.close.R, inc: fyEndRow ? periodSummary(sc, p.end - 11, p.end).inc : null };
+  });
+  const fields = [['L', 'リース負債'], ['cur', 'うち流動'], ['rouNet', '使用権資産簿価'], ['R', '貸手の未収'], ['inc', '受取リース料（年度）']];
+  const rows = rowsData.map((r) => {
+    const a = draft[r.key] || {};
+    const inp = (f) => h('input', { type: 'number', step: 'any', value: a[f] ?? '', 'aria-label': `${r.p.label} ${f}`, on: { input: (e) => { draft[r.key] = draft[r.key] || {}; if (e.target.value === '') delete draft[r.key][f]; else draft[r.key][f] = Number(e.target.value); } } });
+    const judge = (f) => (a[f] === undefined || a[f] === null ? h('span', { class: 'muted' }, '—') : Number(a[f]) === r[f] ? statusBadge('ok', '一致') : statusBadge('ng', `差異 ${fmt(Number(a[f]) - r[f])}`));
+    return h('tr', null, h('td', null, r.p.label), ...fields.map(([f]) => (r[f] === null ? h('td', { class: 'muted' }, '（年度末のみ）') : h('td', null, inp(f), h('div', { class: 'small muted' }, `計算値 ${fmt(r[f])}`), judge(f)))));
   });
   return card('個別の帳簿残高（実績）との突合',
-    h('p', { class: 'help' }, '借手・貸手の個別帳簿の金額を入力すると、アプリの計算値と比較します（検算 CHK-10）。差異があれば原因（割引率・支払条件・端数処理・計上漏れ等）を調査し、必要に応じて個社修正を行います。'),
+    h('p', { class: 'help' }, '借手・貸手の個別帳簿の金額を入力すると、アプリの計算値と比較します（検算 CHK-10）。表示中の期間区分（年度／四半期）の期末ごとに入力できます。受取リース料は年度の金額で、年度末の行にだけ入力します。差異があれば原因（割引率・支払条件・端数処理・計上漏れ等）を調査し、必要に応じて個社修正を行います。'),
     h('div', { class: 'table-wrap' }, h('table', { class: 'tbl compact' },
-      h('thead', null, h('tr', null, h('th', null, '年度'), h('th', null, 'リース負債（帳簿）'), h('th', { class: 'num' }, '計算値'), h('th', null, '判定'), h('th', null, '使用権資産簿価（帳簿）'), h('th', { class: 'num' }, '計算値'), h('th', null, '判定'), h('th', null, '受取リース料（帳簿）'), h('th', { class: 'num' }, '計算値'), h('th', null, '判定'))),
+      h('thead', null, h('tr', null, h('th', null, '期間'), ...fields.map(([, l]) => h('th', null, `${l}（帳簿）`)))),
       h('tbody', null, rows))),
     h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', on: { click: () => update((d) => { const t = d.contracts.find((x) => x.id === c.id); t.actuals = sanitizeContract({ ...t, actuals: draft }).actuals; }, '実績入力', c.id) } }, '実績を保存')));
+}
+
+/** 条件変更（再測定）の入力欄 */
+function modsFieldset(f) {
+  f.modifications = f.modifications || [];
+  const body = h('tbody');
+  const draw = () => body.replaceChildren(...f.modifications.map((m, i) => h('tr', null,
+    h('td', null, h('input', { type: 'month', value: m.ym || '', 'aria-label': '変更年月', on: { input: (e) => { m.ym = e.target.value; } } })),
+    h('td', null, h('input', { type: 'number', step: 'any', min: 0, value: m.payment ?? '', placeholder: '変更なし', 'aria-label': '変更後のリース料', on: { input: (e) => { m.payment = e.target.value === '' ? null : Number(e.target.value); } } })),
+    h('td', null, h('input', { type: 'number', step: 1, min: 1, value: m.termMonths ?? '', placeholder: '変更なし', 'aria-label': '変更後のリース期間', on: { input: (e) => { m.termMonths = e.target.value === '' ? null : Number(e.target.value); } } })),
+    h('td', null, h('input', { type: 'number', step: 'any', value: m.rate === null || m.rate === undefined ? '' : +(m.rate * 100).toFixed(6), placeholder: '変更なし', 'aria-label': '変更後の割引率', on: { input: (e) => { m.rate = e.target.value === '' ? null : Number(e.target.value) / 100; } } })),
+    h('td', null, h('input', { type: 'text', maxlength: 200, value: m.note || '', 'aria-label': '内容', on: { input: (e) => { m.note = e.target.value; } } })),
+    h('td', null, h('button', { class: 'btn-link danger', type: 'button', on: { click: () => { f.modifications.splice(i, 1); draw(); } } }, '削除')))));
+  draw();
+  return h('fieldset', null, h('legend', null, '条件変更・再測定（変更月の月初から適用）'),
+    h('p', { class: 'help' }, '借手はリース負債を変更後の残存リース料の現在価値で再測定し、使用権資産を同額調整します（期間短縮で範囲が縮小する場合は一部を取り崩して損益）。指数・レートによる変動は割引率を「変更なし」、期間の見直し等は見直し後の割引率を入力します。貸手は変更日から新たなリースとして、未収（前受）を含めて残存期間で定額認識します。'),
+    h('div', { class: 'table-wrap' }, h('table', { class: 'tbl compact' }, h('thead', null, h('tr', null, ['変更年月', '変更後の1回あたりリース料', '変更後のリース期間（開始からの総月数）', '変更後の割引率（年％）', '内容', ''].map((t) => h('th', null, t)))), body)),
+    h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', on: { click: () => { f.modifications.push({ ym: '', payment: null, termMonths: null, rate: null, note: '' }); draw(); } } }, '＋ 条件変更を追加')));
 }
 
 function editor(c, data) {
@@ -184,9 +204,11 @@ function editor(c, data) {
       field('使用部門', sel(f.lessee, 'dept', Object.entries(LESSEE_DEPT)), '貸手の減価償却費の組替先（POL-05）'),
       field('償却月数（空欄＝リース期間）', num(f.lessee, 'depMonths', { step: 1, nullable: true })),
       field('当初リース負債の取込値（空欄＝再計算）', num(f.lessee, 'liabilityOverride', { nullable: true }), '借手の帳簿値。再計算値との差は検算で表示'),
-      field('適用初年度の経過措置', sel(f.lessee.transition, 'method', [['none', 'なし（適用後に開始・または完全遡及）'], ['cumulative', '累積的影響方式（使用権資産＝リース負債）']])),
-      field('適用開始年月', month(f.lessee.transition, 'ym')),
-      field('適用開始時の割引率（年％）', pct(f.lessee.transition, 'rate')))),
+      field('適用開始前に開始した契約の使用権資産の測定', sel(f.lessee, 'rouTransition', [['eq_liability', 'リース負債と同額'], ['retrospective', 'リース開始時から適用していたとみなして測定']]), '借手会社の適用初年度の方法が「累積的影響方式」の場合に使用'),
+      field('適用開始時の割引率（年％、空欄＝上の割引率）', h('input', { type: 'number', step: 'any', value: f.lessee.transitionRate === null || f.lessee.transitionRate === undefined ? '' : +(f.lessee.transitionRate * 100).toFixed(6), on: { input: (e) => { f.lessee.transitionRate = e.target.value === '' ? null : Number(e.target.value) / 100; } } })),
+      f.lessee.transition?.method === 'cumulative' ? field('（旧形式）契約単位の適用開始年月', month(f.lessee.transition, 'ym'), '旧版で入力した契約単位の設定。会社マスタの設定より優先されます') : null,
+      field('法人税法上のリース取引（売買扱い）', h('input', { type: 'checkbox', checked: !!f.lessee.taxLease, on: { change: (e) => { f.lessee.taxLease = e.target.checked; } } }), '該当する場合、税効果は個別検討（検算で注意喚起）'))),
+    modsFieldset(f),
     h('fieldset', null, h('legend', null, '貸手の情報（オペレーティング・リース）'), grid(
       field('資産ID', txt(f.lessor, 'assetId', 30), '同じ資産を複数契約で使う場合は同じIDにし、按分比率を設定'),
       field('対象資産の取得原価', num(f.lessor, 'assetCost', { min: 0 })),
@@ -194,7 +216,8 @@ function editor(c, data) {
       field('取得年月', month(f.lessor, 'assetStart')),
       field('按分比率（％）', pct(f.lessor, 'ratio')),
       field('受取リース料の計上区分', sel(f.lessor, 'incClass', [['sales', '売上高'], ['nonop', '営業外収益']])),
-      field('減価償却費の計上区分', sel(f.lessor, 'depClass', [['cogs', '売上原価（賃貸原価）'], ['nonop', '営業外費用']])))),
+      field('減価償却費の計上区分', sel(f.lessor, 'depClass', [['cogs', '売上原価（賃貸原価）'], ['nonop', '営業外費用']])),
+      field('貸手のリース期間（月数、空欄＝借手と同じ）', num(f.lessor, 'termMonths', { step: 1, nullable: true }), '貸手が延長オプションを考慮しない場合など。期間後は残りのリース料を残存期間で定額認識'))),
     h('div', { class: 'actions' },
       h('button', { class: 'btn primary', type: 'submit' }, '保存（入力検証あり）'),
       h('button', { class: 'btn', type: 'button', on: { click: () => {
