@@ -1,0 +1,12 @@
+{
+  "name": "new-lease-consolidation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "新リース会計基準 グループ内リースの個社修正・連結修正仕訳作成アプリ",
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/serve.mjs",
+    "test": "node --test tests/*.test.js"
+  },
+  "engines": { "node": ">=18" }
+}

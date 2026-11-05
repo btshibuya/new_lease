@@ -1,0 +1,168 @@
+// 計算エンジンの自動テスト（node --test）
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { buildSchedule, periodSummary, currentPortion, validateContract } from '../app/src/engine/schedule.js';
+import { generateAll } from '../app/src/engine/elimination.js';
+import { runChecks } from '../app/src/engine/checks.js';
+import { defaultPolicies, POLICIES, sanitizePolicies } from '../app/src/engine/policies.js';
+import { sampleData } from '../app/src/engine/sample.js';
+import { buildPeriods, ymToIndex, round } from '../app/src/engine/util.js';
+import { sanitizeData, csvCell, appendLog, verifyChain } from '../app/src/engine/data.js';
+import { worksheet, MUST_BE_ZERO, contractYearly } from '../app/src/engine/reports.js';
+
+const FY = buildPeriods(ymToIndex('2027-04'), ymToIndex('2032-03'), 3, 'year');
+const pol = defaultPolicies();
+const data = sampleData();
+const k001 = data.contracts.find((c) => c.id === 'K-001');
+
+function net(j) {
+  const m = {};
+  for (const l of j.lines) m[`${l.acc}`] = (m[l.acc] || 0) + l.amt;
+  return m;
+}
+
+test('端数処理（四捨五入・切捨・切上、負数）', () => {
+  assert.equal(round(2.5), 3);
+  assert.equal(round(-2.5), -3);
+  assert.equal(round(2.4999), 2);
+  assert.equal(round(2.9, 'floor'), 2);
+  assert.equal(round(2.1, 'ceil'), 3);
+  assert.equal(round(-2.1, 'ceil'), -3);
+});
+
+test('設例（要件定義書 第10章）のスケジュールが期待値と一致', () => {
+  const s = buildSchedule(k001, pol);
+  assert.equal(s.meta.L0, 4580);
+  const exp = [
+    [0, 137, 1000, 3717, 3664, 916, 888],
+    [3717, 112, 1000, 2829, 2748, 916, 915],
+    [2829, 85, 1000, 1914, 1832, 916, 943],
+    [1914, 57, 1000, 971, 916, 916, 971],
+    [971, 29, 1000, 0, 0, 916, 0],
+  ];
+  FY.forEach((p, i) => {
+    const ps = periodSummary(s, p.start, p.end);
+    const [open, int, pay, close, rou, dep, cur] = exp[i];
+    assert.equal(ps.open.L, open, `年${i + 1} 期首負債`);
+    assert.equal(ps.int, int, `年${i + 1} 利息`);
+    assert.equal(ps.pay, pay);
+    assert.equal(ps.close.L, close, `年${i + 1} 期末負債`);
+    assert.equal(ps.close.cost - ps.close.acc, rou, `年${i + 1} 使用権資産簿価`);
+    assert.equal(ps.dep, dep);
+    assert.equal(currentPortion(s, p.end), cur, `年${i + 1} 流動部分`);
+  });
+});
+
+test('設例：1年目・2年目の連結修正仕訳が要件定義書と一致', () => {
+  const d = { ...data, contracts: [k001] };
+  const g1 = generateAll(d, FY[0], pol);
+  const t = (g, tpl) => g.journals.find((j) => j.tpl === tpl);
+  assert.deepEqual(net(t(g1, 'C-02')), { LL_NC: 4580, ROU_COST: -4580 });
+  assert.deepEqual(net(t(g1, 'C-03')), { ROU_ACC: 916, DEP_ROU: -916 });
+  assert.deepEqual(net(t(g1, 'C-04')), { LL_NC: -863, INT: -137, LEASE_INC: 1000 });
+  assert.deepEqual(net(t(g1, 'C-10')), { LL_C: 888, LL_NC: -888 });
+  assert.deepEqual(net(t(g1, 'C-13')), { TAX_ADJ: 16, DTA: -16 });
+  assert.deepEqual(net(t(g1, 'C-11')), { RECLASS_ASSET: 6000, RENTAL_ASSET: -6000, RENTAL_ACC: 600, RECLASS_ACC: -600 });
+  assert.deepEqual(net(t(g1, 'C-12')), { DEP_RECLASS: 600, RENTAL_DEP: -600 });
+  const g2 = generateAll(d, FY[1], pol);
+  assert.deepEqual(net(t(g2, 'C-01')), { LL_NC: 3717, ROU_COST: -4580, ROU_ACC: 916, RE_OPEN: -53 });
+  assert.deepEqual(net(t(g2, 'C-01T')), { RE_OPEN: 16, DTA: -16 });
+  assert.deepEqual(net(t(g2, 'C-04')), { LL_NC: -888, INT: -112, LEASE_INC: 1000 });
+  assert.deepEqual(net(t(g2, 'C-13')), { TAX_ADJ: 8, DTA: -8 });
+  assert.deepEqual(net(t(g2, 'C-10')), { LL_C: 915, LL_NC: -915 });
+  // 4年目は消去差額が減少 → 税効果は貸借逆
+  const g4 = generateAll(d, FY[3], pol);
+  assert.deepEqual(net(t(g4, 'C-13')), { TAX_ADJ: -8, DTA: 8 });
+  // 5年目：満了で全残高0、開始仕訳の取崩し
+  const g5 = generateAll(d, FY[4], pol);
+  const r5 = g5.results[0];
+  assert.equal(r5.E.close.S1, 0);
+  assert.ok(t(g5, 'C-17'));
+});
+
+test('年度別サマリーの消去差額（累計）＝ 53, 81, 82, 55, 0', () => {
+  const s = buildSchedule(k001, pol);
+  const yr = contractYearly(s, FY, currentPortion);
+  assert.deepEqual(yr.map((r) => r.cumE), [53, 81, 82, 55, 0]);
+  assert.deepEqual(yr.map((r) => r.plEffect), [53, 28, 1, -27, -55]);
+});
+
+test('非支配株主持分の按分（借手60%子会社）', () => {
+  const g = generateAll(data, FY[1], pol);
+  const r = g.results.find((x) => x.contract.id === 'K-002');
+  const e = r.E.open.S2;
+  const dt = r.DT.open.S2;
+  assert.equal(r.NCI.open.S2, round((e - dt) * 0.4));
+  const g2 = generateAll(data, FY[1], { ...pol, 'POL-01': 'none' });
+  assert.ok(!g2.journals.some((j) => j.tpl === 'C-14' || j.tpl === 'C-01N'));
+});
+
+test('全サンプル契約・全会計方針の組合せ・年度/四半期で検算NGがない', () => {
+  const periods = [...buildPeriods(ymToIndex('2027-04'), ymToIndex('2034-03'), 3), ...buildPeriods(ymToIndex('2027-04'), ymToIndex('2028-03'), 3, 'quarter')];
+  const ids = ['POL-01', 'POL-02', 'POL-03', 'POL-04', 'POL-05', 'POL-06', 'POL-07', 'POL-10', 'POL-11'];
+  function* combos(i, cur) {
+    if (i === ids.length) { yield { ...cur }; return; }
+    for (const o of POLICIES.find((p) => p.id === ids[i]).options) { cur[ids[i]] = o.value; yield* combos(i + 1, cur); }
+  }
+  let n = 0;
+  for (const c of combos(0, defaultPolicies())) {
+    for (const p of periods) {
+      const g = generateAll(data, p, c);
+      const ch = runChecks(data, p, c, g);
+      const ng = ch.filter((x) => x.status === 'ng' && x.id !== 'CHK-10');
+      assert.equal(ng.length, 0, `${JSON.stringify(c)} ${p.label} ${ng.map((x) => x.id + x.detail).join()}`);
+      n++;
+    }
+  }
+  assert.ok(n > 1000);
+});
+
+test('消去後のグループ内残高は0（精算表）', () => {
+  for (const p of FY) {
+    const g = generateAll(data, p, pol);
+    const ws = worksheet(g, data.companies, pol, {}, p);
+    for (const r of ws) if (MUST_BE_ZERO.includes(r.acc)) assert.equal(r.consol, 0, `${p.label} ${r.label}`);
+  }
+});
+
+test('入力検証：不正な契約を検出', () => {
+  const bad = { ...k001, termMonths: 61, frequencyMonths: 12, lessorCo: 'X' };
+  const e = validateContract(bad, data.companies);
+  assert.ok(e.some((x) => x.includes('整数倍')));
+  assert.ok(e.some((x) => x.includes('会社マスタ')));
+});
+
+test('取込データの無害化：未知の項目は破棄、不正値は補正', () => {
+  const raw = { companies: [{ code: 'P', name: '<script>', taxRate: 5, evil: 'x' }], contracts: [{ id: 'A', termMonths: 'abc', frequencyMonths: 7, lessee: { model: 'hack', rate: -1 }, __proto__: { polluted: true } }] };
+  const { data: d } = sanitizeData(raw);
+  assert.equal(d.companies[0].taxRate, 0.99);
+  assert.equal(d.companies[0].evil, undefined);
+  assert.equal(d.contracts[0].frequencyMonths, 1);
+  assert.equal(d.contracts[0].lessee.model, 'jgaap');
+  assert.equal(d.contracts[0].lessee.rate, 0);
+  assert.equal({}.polluted, undefined);
+  assert.throws(() => sanitizeData(null));
+});
+
+test('CSV数式インジェクション対策', () => {
+  assert.equal(csvCell('=HYPERLINK("x")'), `"'=HYPERLINK(""x"")"`);
+  assert.equal(csvCell('+cmd'), "'+cmd");
+  assert.equal(csvCell('@SUM(A1)'), "'@SUM(A1)");
+  assert.equal(csvCell(-123), '-123');
+  assert.equal(csvCell('普通の文字'), '普通の文字');
+});
+
+test('監査ログのハッシュ連鎖：改ざんを検知', () => {
+  const log = [];
+  appendLog(log, 'A', '1');
+  appendLog(log, 'B', '2');
+  assert.equal(verifyChain(log).ok, true);
+  log[0].detail = '改ざん';
+  assert.equal(verifyChain(log).ok, false);
+});
+
+test('会計方針：不正な保存値は既定値に戻る', () => {
+  const p = sanitizePolicies({ 'POL-01': 'none', 'POL-02': 'evil' });
+  assert.equal(p['POL-01'], 'none');
+  assert.equal(p['POL-02'], 'reverse');
+});
