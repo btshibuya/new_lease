@@ -4,7 +4,7 @@ import { gantt, barChart, lineChart } from '../charts.js';
 import { state, update, setUi } from '../store.js';
 import { validateContract, currentPortion } from '../../engine/schedule.js';
 import { sanitizeContract } from '../../engine/data.js';
-import { contractYearly } from '../../engine/reports.js';
+import { contractYearly, eFromSchedule } from '../../engine/reports.js';
 import { ASSET_CLASSES, LESSEE_DEPT } from '../../engine/accounts.js';
 import { fmt, ymToIndex, indexToJp, indexToYm, deepClone } from '../../engine/util.js';
 
@@ -64,6 +64,9 @@ function renderDetail(c, ctx) {
   if (errs.length) parts.push(h('div', { class: 'alert' }, h('strong', null, '入力エラー：'), h('ul', null, errs.map((e) => h('li', null, e)))));
   if (sc) {
     const yr = contractYearly(sc, yearPeriods, currentPortion);
+    // 消去による純資産修正額（会計方針を反映。仕訳の純資産修正額と同額であることは検算 CHK-03 で確認）
+    const eAt = (idx) => Object.values(eFromSchedule(sc, idx, ctx.pol)).reduce((a, v) => a + v, 0);
+    yr.forEach((r) => { r.cumE = eAt(r.end); r.plEffect = r.cumE - eAt(r.start - 1); });
     const labels = yr.map((r) => r.label.replace('年', '/').replace('月期', ''));
     parts.push(h('div', { class: 'kpis' },
       h('div', { class: 'kpi' }, h('div', { class: 'kpi-label' }, 'リース負債の当初測定額'), h('div', { class: 'kpi-value' }, fmt(sc.meta.L0)), h('div', { class: 'kpi-sub' }, `割引率 ${(sc.meta.rate * 100).toFixed(3)}%（期間換算 ${(sc.meta.rp * 100).toFixed(4)}%）`)),
@@ -73,8 +76,8 @@ function renderDetail(c, ctx) {
       card(null, barChart({ title: '返済スケジュール（年度別）', subtitle: '棒：支払額の内訳（元本・利息）、線：年度末のリース負債残高', labels, series: [{ name: '元本返済', values: yr.map((r) => r.principal), color: COLORS.lessee }, { name: '利息', values: yr.map((r) => r.int), color: 'var(--s4)' }], stacked: true, line: { name: '期末リース負債', values: yr.map((r) => r.closeL), color: 'var(--s7)' }, unit })),
       card(null, lineChart({ title: '消去差額の発生の仕組み', subtitle: 'リース負債（実線）と使用権資産簿価（破線）の差が、連結上取り消す累積損益差', labels: ['開始', ...labels], series: [{ name: 'リース負債', values: [sc.meta.L0, ...yr.map((r) => r.closeL)], color: COLORS.lessee }, { name: '使用権資産簿価', values: [sc.meta.model === 'offbalance' ? 0 : sc.meta.C0, ...yr.map((r) => r.rouNet)], color: COLORS.lessor, dashed: true }], band: { upper: 0, lower: 1, name: '差額', color: COLORS.diff }, unit }))));
     parts.push(h('div', { class: 'grid2' },
-      card(null, barChart({ title: '消去差額の推移（年度別）', subtitle: '棒：当期の連結損益への影響（借手費用−貸手収益−解約益−初期直接費用）、線：消去差額の累計（＝連結上の利益剰余金への影響）。期間終了時に0に戻ります', labels, series: [{ name: '当期差', values: yr.map((r) => r.plEffect), color: COLORS.diff }], line: { name: '消去差額（累計）', values: yr.map((r) => r.cumE), color: 'var(--s7)' }, unit })),
-      card(null, barChart({ title: '借手の費用 vs 貸手の収益（年度別）', subtitle: '借手：減価償却費＋支払利息（逓減）、貸手：受取リース料（定額）。差が当期の連結損益への影響', labels, series: [{ name: '借手の費用', values: yr.map((r) => r.lesseeExp), color: COLORS.lessee }, { name: '貸手の収益', values: yr.map((r) => r.inc), color: COLORS.lessor }], unit }))));
+      card(null, barChart({ title: '消去差額の推移（年度別）', subtitle: '棒：当期の連結損益への影響（税引前。初期直接費用・解約損益の扱いは会計方針を反映）、線：消去差額の累計（＝連結上の利益剰余金への影響）。期間終了時に0に戻ります', labels, series: [{ name: '当期差', values: yr.map((r) => r.plEffect), color: COLORS.diff }], line: { name: '消去差額（累計）', values: yr.map((r) => r.cumE), color: 'var(--s7)' }, unit })),
+      card(null, barChart({ title: '借手の費用 vs 貸手の収益（年度別）', subtitle: '借手：減価償却費＋支払利息（逓減）、貸手：受取リース料（定額）。初期直接費用・解約損益がなければ、この差が当期の連結損益への影響', labels, series: [{ name: '借手の費用', values: yr.map((r) => r.lesseeExp), color: COLORS.lessee }, { name: '貸手の収益', values: yr.map((r) => r.inc), color: COLORS.lessor }], unit }))));
     parts.push(card('年度別サマリー（要件定義書 第10章の表と同じ構成）', table([
       { label: '年度', key: 'label' },
       { label: '期首負債', key: 'openL', num: true },
@@ -136,8 +139,14 @@ function editor(c, data) {
   const month = (obj, key) => h('input', { type: 'month', value: obj[key] ?? '', on: { input: (e) => { obj[key] = e.target.value || null; } } });
   const sel = (obj, key, opts) => select(opts, obj[key], (v) => { obj[key] = isNaN(Number(v)) || v === '' ? v : (typeof obj[key] === 'number' ? Number(v) : v); });
   const coOpts = data.companies.map((x) => [x.code, `${x.code} ${x.name}`]);
+  let stepsError = '';
   const stepsInput = h('input', { type: 'text', value: (f.steps || []).map((s) => `${s.fromPayment}:${s.amount}`).join(', '), placeholder: '例）25:55, 37:60', on: { input: (e) => {
-    f.steps = e.target.value.split(',').map((x) => x.trim()).filter(Boolean).map((x) => { const [a, b] = x.split(':'); return { fromPayment: Number(a), amount: Number(b) }; });
+    // 全角数字・全角コロン・読点を半角に変換し、「回:金額」の形式だけを受け付ける
+    const t = e.target.value.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0)).replace(/[：]/g, ':').replace(/[、，]/g, ',');
+    const parts = t.split(',').map((x) => x.trim()).filter(Boolean);
+    const bad = parts.filter((x) => !/^\d+\s*:\s*\d+(\.\d+)?$/.test(x));
+    stepsError = bad.length ? `段階賃料の形式が不正です：${bad.join('、')}（「回:金額」で入力）` : '';
+    f.steps = bad.length ? f.steps : parts.map((x) => { const [a, b] = x.split(':'); return { fromPayment: Number(a), amount: Number(b) }; });
   } } });
   if (!f.lessee.transition) f.lessee.transition = { method: 'none' };
 
@@ -146,7 +155,9 @@ function editor(c, data) {
     e.preventDefault();
     f.frequencyMonths = Number(f.frequencyMonths);
     const clean = sanitizeContract(f);
-    const errs = validateContract(clean, data.companies);
+    // 補正前（入力どおり）と補正後の両方を検証する（空欄の按分比率が下限値に補正されて見逃される等を防ぐ）
+    const errs = [...new Set([...validateContract(f, data.companies), ...validateContract(clean, data.companies)])];
+    if (stepsError) errs.unshift(stepsError);
     if (data.contracts.some((x) => x.id === clean.id && x.id !== c.id)) errs.push('契約番号が重複しています');
     if (errs.length) { toast(`保存できません：${errs[0]}${errs.length > 1 ? ` ほか${errs.length - 1}件` : ''}`, 'error'); return; }
     update((d) => { const i = d.contracts.findIndex((x) => x.id === c.id); d.contracts[i] = clean; }, '契約更新', `${c.id}${clean.id !== c.id ? `→${clean.id}` : ''}`);
@@ -164,7 +175,8 @@ function editor(c, data) {
       field('1回あたりリース料', num(f, 'payment', { min: 0 }), '消費税・非リース構成部分を除く'),
       field('フリーレント（無償の支払回数）', num(f, 'freePayments', { step: 1, min: 0 })),
       field('段階賃料（支払回:金額）', stepsInput, '例）25回目から55 → 25:55'),
-      field('中途解約年月（任意）', month(f, 'terminationYm'), '解約月の末日に借手が取崩し、貸手は未収を取崩し'))),
+      field('中途解約年月（任意）', month(f, 'terminationYm'), '解約月の末日に借手が取崩し、貸手は未収を取崩し'),
+      field('解約違約金（借手→貸手）', num(f, 'terminationPenalty', { min: 0 }), '解約時の精算金。連結上は相殺消去'))),
     h('fieldset', null, h('legend', null, '借手の情報（個別でオンバランス済みの内容）'), grid(
       field('借手の会計モデル', sel(f.lessee, 'model', Object.entries(MODEL))),
       field('割引率（年％）', pct(f.lessee, 'rate')),
@@ -185,7 +197,14 @@ function editor(c, data) {
       field('減価償却費の計上区分', sel(f.lessor, 'depClass', [['cogs', '売上原価（賃貸原価）'], ['nonop', '営業外費用']])))),
     h('div', { class: 'actions' },
       h('button', { class: 'btn primary', type: 'submit' }, '保存（入力検証あり）'),
-      h('button', { class: 'btn', type: 'button', on: { click: () => { const copy = sanitizeContract({ ...deepClone(c), id: `${c.id}-copy` }); update((d) => d.contracts.push(copy), '契約複製', copy.id); setUi({ contractId: copy.id }); } } }, '複製'),
+      h('button', { class: 'btn', type: 'button', on: { click: () => {
+        let n = 1;
+        while (data.contracts.some((x) => x.id === `${c.id}-${n}`)) n++;
+        const copy = sanitizeContract({ ...deepClone(c), id: `${c.id}-${n}`, actuals: {} });
+        update((d) => d.contracts.push(copy), '契約複製', `${c.id}→${copy.id}`);
+        setUi({ contractId: copy.id });
+      } } }, '複製'),
       h('button', { class: 'btn danger', type: 'button', on: { click: () => { if (confirm(`契約 ${c.id} を削除しますか？`)) { update((d) => { d.contracts = d.contracts.filter((x) => x.id !== c.id); }, '契約削除', c.id); setUi({ contractId: null }); } } } }, '削除')));
-  return card('契約の編集', form);
+  const lockNote = (data.locks || []).length ? h('div', { class: 'alert' }, `確定済みの期間が ${(data.locks || []).length} 件あります。確定済み期間の数値が変わる変更をすると、検算 CHK-13 が NG になります。条件変更は変更日以降の期間に反映されるよう入力してください。`) : null;
+  return card('契約の編集', lockNote, form);
 }

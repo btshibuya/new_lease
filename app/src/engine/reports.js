@@ -1,10 +1,6 @@
 // 連結精算表・連結CF消去データ・満期分析（共通部品）
-import { accountLabel, ACCOUNTS } from './accounts.js';
+import { accountLabel, ACCOUNTS, metaOf } from './accounts.js';
 import { round } from './util.js';
-
-function metaOf(c) {
-  return { contractId: c.id, assetClass: c.assetClass, lesseeDept: c.lessee?.dept, lessorIncClass: c.lessor?.incClass || 'sales', lessorDepClass: c.lessor?.depClass || 'cogs' };
-}
 
 /**
  * 個別財務諸表上のグループ内リース関連残高（アプリの計算値）。借方＋。
@@ -21,12 +17,14 @@ export function individualLines(result, companies, pol) {
   const cl = ps.close;
   const legacy = !!lessee.legacyAccounts;
   const model = sched.meta.model;
+  const pS = result.periodStart, pE = result.periodEnd;
   if (model !== 'offbalance') {
     const curAmt = lessee.splitsCurrent === false ? 0 : cur;
     if (legacy) {
       add('LEGACY_ASSET', c.lesseeCo, cl.cost, '借手個別：リース資産');
       add('LEGACY_ACC', c.lesseeCo, -cl.acc, '借手個別：減価償却累計額');
-      add('LEGACY_LIAB', c.lesseeCo, -cl.L, '借手個別：リース債務');
+      add('LEGACY_LIAB_C', c.lesseeCo, -curAmt, '借手個別：リース債務（流動）');
+      add('LEGACY_LIAB', c.lesseeCo, -(cl.L - curAmt), '借手個別：リース債務（固定）');
     } else {
       add('ROU_COST', c.lesseeCo, cl.cost, '借手個別：使用権資産');
       add('ROU_ACC', c.lesseeCo, -cl.acc, '借手個別：減価償却累計額');
@@ -37,26 +35,26 @@ export function individualLines(result, companies, pol) {
   add('LEASE_ACCRUED', c.lesseeCo, -cl.X, '借手個別：未払リース料');
   add('DEP_ROU', c.lesseeCo, ps.dep, '借手個別：減価償却費');
   add('INT', c.lesseeCo, ps.int, '借手個別：支払利息');
-  // 適用開始前（旧基準）の支払リース料・簡便法/ASC842の単一費用
-  const preT = sched.months.filter((x) => x.m >= result.periodStart && x.m <= result.periodEnd && !x.lessee.active).reduce((a, x) => a + x.lessor.cash, 0);
-  add('LEASE_COST', c.lesseeCo, ps.cost + preT, '借手個別：リース費用');
+  const inP = sched.months.filter((x) => x.m >= pS && x.m <= pE);
+  const preT = inP.filter((x) => !x.lessee.active).reduce((a, x) => a + x.lessor.cash, 0);
+  add('PRE_RENT', c.lesseeCo, preT, '借手個別：適用開始前の支払リース料');
+  add(model === 'asc842ol' ? 'ASC_COST' : 'SHORT_COST', c.lesseeCo, ps.cost, '借手個別：リース費用');
   if (ps.term && ps.term.gain) add('TERM_GAIN', c.lesseeCo, -ps.term.gain, '借手個別：解約損益');
-  if (pol['POL-07'] === 'capitalize') {
-    /* 個別では初期直接費用は使用権資産に含まれている */
-  }
+  const pen = inP.reduce((a, x) => a + (x.lessee.penalty || 0), 0);
+  add('PENALTY_EXP', c.lesseeCo, pen, '借手個別：支払違約金');
+  add('PENALTY_INC', c.lessorCo, -pen, '貸手個別：受取違約金');
   // 貸手
   add('LEASE_INC', c.lessorCo, -ps.inc, '貸手個別：受取リース料');
   add('ACCR_INC', c.lessorCo, cl.R, '貸手個別：未収リース料（定額法）');
   const r = c.lessor || {};
   if (r.assetCost > 0) {
     const ratio = r.ratio ?? 1;
-    const endRec = ps.lastRec;
-    const ongoing = result.periodEnd >= sched.meta.start && result.periodEnd <= sched.meta.lastIdx && !(endRec && endRec.lessee.term);
-    if (ongoing && endRec) {
+    const endRec = sched.byIndex(pE);
+    if (endRec && !endRec.lessee.term) {
       add('RENTAL_ASSET', c.lessorCo, R(r.assetCost * ratio), '貸手個別：賃貸資産（按分後）');
       add('RENTAL_ACC', c.lessorCo, -R(endRec.lessor.assetAcc_end * ratio), '貸手個別：減価償却累計額（按分後）');
     }
-    const act = sched.months.filter((x) => x.m >= result.periodStart && x.m <= result.periodEnd && x.m >= sched.meta.start);
+    const act = inP.filter((x) => x.m >= sched.meta.start);
     add('RENTAL_DEP', c.lessorCo, R(act.reduce((a, x) => a + (x.lessor.assetDep || 0), 0) * ratio), '貸手個別：減価償却費（リース期間分・按分後）');
   }
   return out;
@@ -72,8 +70,6 @@ export function worksheet(gen, companies, pol, names, period) {
     return rows.get(k);
   };
   for (const r of gen.results) {
-    r.periodStart = period.start;
-    r.periodEnd = period.end;
     for (const l of individualLines(r, companies, pol)) {
       const row = get(l);
       if (ACCOUNTS[l.acc]?.side === 'R') row.lessor += l.amt;
@@ -94,25 +90,24 @@ export function worksheet(gen, companies, pol, names, period) {
 }
 
 /** グループ内で消去後に0となるべき科目 */
-export const MUST_BE_ZERO = ['ROU_COST', 'ROU_ACC', 'LL_C', 'LL_NC', 'LEASE_ACCRUED', 'DEP_ROU', 'INT', 'LEASE_COST', 'LEASE_INC', 'ACCR_INC', 'LEGACY_ASSET', 'LEGACY_ACC', 'LEGACY_LIAB'];
+export const MUST_BE_ZERO = ['ROU_COST', 'ROU_ACC', 'LL_C', 'LL_NC', 'LEASE_ACCRUED', 'DEP_ROU', 'INT', 'ASC_COST', 'SHORT_COST', 'PRE_RENT', 'LEASE_INC', 'ACCR_INC', 'PENALTY_INC', 'PENALTY_EXP', 'LEGACY_ASSET', 'LEGACY_ACC', 'LEGACY_LIAB', 'LEGACY_LIAB_C'];
 
 /** 連結CF計算書の消去データ */
 export function cashFlowEliminations(gen, pol, period) {
-  let repay = 0, interestPaid = 0, opLease = 0, receipts = 0;
+  let repay = 0, interestPaid = 0, opLease = 0, receipts = 0, penalty = 0;
   for (const r of gen.results) {
     const { sched } = r;
-    const c = r.contract;
-    const term = c.terminationYm ? sched.meta.lastIdx : null;
+    const term = r.contract.terminationYm ? sched.meta.lastIdx : null;
     for (const rec of sched.months) {
       if (rec.m < period.start || rec.m > period.end) continue;
       receipts += rec.lessor.cash;
-      if (!rec.lessee.active || sched.meta.model !== 'jgaap') { opLease += rec.lessor.cash; continue; }
+      penalty += rec.lessee.penalty || 0;
+      if (!rec.lessee.active || sched.meta.model !== 'jgaap') opLease += rec.lessor.cash;
     }
     if (sched.meta.model === 'jgaap') {
       for (const sg of sched.meta.segments) {
         const pm = sg.pay.month;
-        if (pm < period.start || pm > period.end) continue;
-        if (term !== null && pm > term) continue;
+        if (pm < period.start || pm > period.end || (term !== null && pm > term)) continue;
         const ip = Math.min(sg.interest, sg.pay.amount);
         interestPaid += ip;
         repay += sg.pay.amount - ip;
@@ -124,9 +119,11 @@ export function cashFlowEliminations(gen, pol, period) {
       { section: '財務活動', label: 'リース負債の返済による支出（借手）', amount: -repay, elim: repay },
       { section: pol['POL-09'] === 'financing' ? '財務活動' : '営業活動', label: '利息の支払額（借手・リース負債分）', amount: -interestPaid, elim: interestPaid },
       { section: '営業活動', label: 'リース料の支払（借手：短期・少額、ASC842オペ、適用開始前）', amount: -opLease, elim: opLease },
-      { section: '営業活動', label: 'リース料の受取（貸手：営業収入）', amount: receipts, elim: -receipts },
+      { section: '営業活動', label: '解約違約金の支払（借手）', amount: -penalty, elim: penalty },
+      { section: '営業活動', label: 'リース料・違約金の受取（貸手：営業収入）', amount: receipts + penalty, elim: -(receipts + penalty) },
     ],
     check: repay + interestPaid + opLease - receipts,
+    totals: { repay, interestPaid, opLease, receipts, penalty },
   };
 }
 
@@ -140,21 +137,41 @@ export function maturity(gen, period) {
     { label: '4年超5年以内', from: 49, to: 60 },
     { label: '5年超', from: 61, to: 1e9 },
   ];
-  const vals = buckets.map((b) => ({ ...b, amount: 0 }));
+  const vals = buckets.map((b) => ({ ...b, amount: 0, principal: 0 }));
   for (const r of gen.results) {
     const { sched } = r;
     if (sched.meta.model === 'offbalance') continue;
     const term = r.contract.terminationYm ? sched.meta.lastIdx : null;
-    for (const p of sched.meta.payments) {
-      if (p.month <= period.end) continue;
-      if (term !== null && p.month > term) continue;
-      if (p.month < sched.meta.measStart) continue;
+    const endRec = sched.byIndex(period.end);
+    if (!endRec || !endRec.lessee.active || endRec.lessee.term) continue;
+    let prevAfter = endRec.lessee.L_end;
+    for (const sg of sched.meta.segments) {
+      const p = sg.pay;
+      if (p.month <= period.end || (term !== null && p.month > term)) continue;
       const d = p.month - period.end;
       const b = vals.find((x) => d >= x.from && d <= x.to);
-      if (b) b.amount += p.amount;
+      // 元本ベース：その支払で減少する残高（期末残高からの減少分）
+      const principal = prevAfter - sg.after;
+      prevAfter = sg.after;
+      if (b) { b.amount += p.amount; b.principal += principal; }
     }
   }
   return vals;
+}
+
+/**
+ * スケジュールから直接求める会社別の純資産修正額（仕訳とは別経路の検証用）
+ * 借手：リース負債＋未払リース料−使用権資産簿価（初期直接費用を資産計上する方針では、その未償却残高を除く）
+ * 貸手：−未収リース料
+ */
+export function eFromSchedule(sched, idx, pol) {
+  const c = sched.contract;
+  const rec = idx < sched.meta.firstIdx ? null : sched.byIndex(Math.min(idx, sched.meta.lastIdx));
+  if (!rec || (idx > sched.meta.lastIdx)) return { [c.lesseeCo]: 0, [c.lessorCo]: 0 };
+  const le = rec.lessee;
+  let eL = (le.L_end || 0) + (le.X_end || 0) - ((le.cost_end || 0) - (le.acc_end || 0));
+  if (pol['POL-07'] === 'capitalize' && le.active && !le.term && sched.meta.idc) eL += sched.meta.idc - (le.idcAcc_end || 0);
+  return { [c.lesseeCo]: eL, [c.lessorCo]: -(rec.lessor.R_end || 0) };
 }
 
 /**

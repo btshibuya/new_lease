@@ -1,9 +1,9 @@
 // アプリの状態管理。ブラウザの localStorage に保存（利用者ごとの端末内のみ）。
 // localStorage が使えない環境（プライベートモード等）でも動作するよう、すべて try/catch で保護する。
 import { sampleData } from '../engine/sample.js';
-import { sanitizeData, appendLog } from '../engine/data.js';
+import { sanitizeData, appendLog, chainHash } from '../engine/data.js';
 import { defaultPolicies, sanitizePolicies } from '../engine/policies.js';
-import { deepClone } from '../engine/util.js';
+import { deepClone, indexToYm } from '../engine/util.js';
 
 const KEY = 'newlease.v1';
 
@@ -96,4 +96,26 @@ export function exportJson() {
 
 export function snapshot() {
   return deepClone({ data: state.data, policies: state.policies });
+}
+
+/** 期間の確定（スナップショット保存）。 */
+export function lockPeriod(period, nets, policiesText) {
+  const s = indexToYm(period.start), e = indexToYm(period.end);
+  if ((state.data.locks || []).some((l) => l.periodStart === s && l.periodEnd === e)) return false;
+  state.data.locks = [...(state.data.locks || []), { periodStart: s, periodEnd: e, label: period.label, lockedAt: new Date().toISOString(), policiesHash: chainHash('', policiesText), snapshot: nets }];
+  appendLog(state.data.auditLog, '期間確定', `${period.label}（契約 ${Object.keys(nets).length} 件のスナップショットを保存）`);
+  emit();
+  return true;
+}
+
+export function unlockPeriod(period, reason) {
+  const s = indexToYm(period.start), e = indexToYm(period.end);
+  state.data.locks = (state.data.locks || []).filter((l) => !(l.periodStart === s && l.periodEnd === e));
+  appendLog(state.data.auditLog, '確定解除', `${period.label}：${reason}`);
+  emit();
+}
+
+export function isLocked(period) {
+  const s = indexToYm(period.start), e = indexToYm(period.end);
+  return (state.data.locks || []).some((l) => l.periodStart === s && l.periodEnd === e);
 }

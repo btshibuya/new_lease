@@ -54,7 +54,7 @@ export function journalCard(j, ctx, opts = {}) {
     h('header', null,
       h('span', { class: `tpl tpl-${j.kind}` }, j.tpl),
       h('span', { class: 'jt' }, j.title),
-      opts.hideContract ? null : h('span', { class: 'jc' }, `${j.contractId}：${coName(j.lessorCo, companies)} → ${coName(j.lesseeCo, companies)}`)),
+      opts.hideContract ? null : h('span', { class: 'jc' }, j.manual ? `手入力（理由：${j.reason}）` : `${j.contractId}：${coName(j.lessorCo, companies)} → ${coName(j.lesseeCo, companies)}`)),
     tbl, opts.noBasis ? null : basis);
 }
 

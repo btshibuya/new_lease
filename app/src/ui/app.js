@@ -55,7 +55,7 @@ export function compute() {
   }
   const gen = generateAll(d, period, pol, { schedCache });
   const names = d.config.accountNames || {};
-  const checks = runChecks(d, period, pol, gen, names);
+  const checks = runChecks(d, period, pol, gen, names, { schedCache });
   return { data: d, pol, periods, yearPeriods, period, periodIndex: idx, gen, checks, names, schedCache, companies: d.companies, unit: d.config.unit || '' , status: overallStatus(checks) };
 }
 

@@ -13,12 +13,16 @@ export const ACCOUNTS = {
   OTHER_ACC: { name: '長期前払費用償却累計額（初期直接費用）', type: 'BS', side: 'L', group: '資産' },
   LEGACY_ASSET: { name: 'リース資産（個別の旧科目）', type: 'BS', side: 'L', group: '資産' },
   LEGACY_ACC: { name: 'リース資産減価償却累計額（個別の旧科目）', type: 'BS', side: 'L', group: '資産' },
-  LEGACY_LIAB: { name: 'リース債務（個別の旧科目）', type: 'BS', side: 'L', group: '負債' },
+  LEGACY_LIAB_C: { name: 'リース債務（流動・個別の旧科目）', type: 'BS', side: 'L', group: '負債' },
+  LEGACY_LIAB: { name: 'リース債務（固定・個別の旧科目）', type: 'BS', side: 'L', group: '負債' },
   // ── 借手（PL） ──
   DEP_ROU: { name: '減価償却費（使用権資産）', type: 'PL', side: 'L', group: '費用' },
   INT: { name: '支払利息', type: 'PL', side: 'L', group: '費用' },
-  LEASE_COST: { name: 'リース費用（単一費用・簡便法）', type: 'PL', side: 'L', group: '費用' },
+  ASC_COST: { name: 'リース費用（ASC842 単一リース費用）', type: 'PL', side: 'L', group: '費用' },
+  SHORT_COST: { name: 'リース費用（短期・少額リース等）', type: 'PL', side: 'L', group: '費用' },
+  PRE_RENT: { name: '支払リース料（適用開始前・旧基準）', type: 'PL', side: 'L', group: '費用' },
   TERM_GAIN: { name: 'リース解約損益', type: 'PL', side: 'L', group: '損益' },
+  PENALTY_EXP: { name: '解約違約金（支払）', type: 'PL', side: 'L', group: '費用' },
   IDC_EXP: { name: '初期直接費用（連結上の費用処理）', type: 'PL', side: 'L', group: '費用' },
   DEP_OTHER: { name: '減価償却費（初期直接費用）', type: 'PL', side: 'L', group: '費用' },
   // ── 貸手（BS） ──
@@ -28,12 +32,15 @@ export const ACCOUNTS = {
   // ── 貸手（PL） ──
   LEASE_INC: { name: '受取リース料', type: 'PL', side: 'R', group: '収益' },
   RENTAL_DEP: { name: '減価償却費（賃貸資産）', type: 'PL', side: 'R', group: '費用' },
+  PENALTY_INC: { name: '受取違約金（解約）', type: 'PL', side: 'R', group: '収益' },
   // ── 連結固有 ──
   RECLASS_ASSET: { name: '有形固定資産（使用実態の科目）', type: 'BS', side: 'C', group: '資産' },
   RECLASS_ACC: { name: '有形固定資産減価償却累計額（使用実態の科目）', type: 'BS', side: 'C', group: '資産' },
   DEP_RECLASS: { name: '減価償却費（借手の使用部門）', type: 'PL', side: 'C', group: '費用' },
   RE_OPEN: { name: '利益剰余金期首残高', type: 'BS', side: 'C', group: '純資産' },
   NCI: { name: '非支配株主持分', type: 'BS', side: 'C', group: '純資産' },
+  CAP_SURPLUS: { name: '資本剰余金（持分変動）', type: 'BS', side: 'C', group: '純資産' },
+  MANUAL: { name: '手入力科目', type: 'BS', side: 'C', group: '手入力' },
   NCI_PL: { name: '非支配株主に帰属する当期純利益', type: 'PL', side: 'C', group: '損益' },
   DTA: { name: '繰延税金資産（△は繰延税金負債）', type: 'BS', side: 'C', group: '資産' },
   TAX_ADJ: { name: '法人税等調整額', type: 'PL', side: 'C', group: '費用' },
@@ -59,6 +66,7 @@ export const LESSOR_DEP_CLASS = { cogs: '売上原価（賃貸原価）', nonop:
  * @param {object} names カスタマイズ層の科目名上書き
  */
 export function accountLabel(line, policies = {}, names = {}) {
+  if (line.acc === 'MANUAL' || (line.label && !ACCOUNTS[line.acc])) return line.label || '手入力科目';
   const base = names[line.acc] || ACCOUNTS[line.acc]?.name || line.acc;
   const m = line.meta || {};
   const cls = ASSET_CLASSES[m.assetClass] || '';
@@ -87,4 +95,31 @@ export function accountLabel(line, policies = {}, names = {}) {
 /** 科目の表示グループキー（集計用）：表示名＋会社 */
 export function isPL(acc) {
   return ACCOUNTS[acc]?.type === 'PL';
+}
+
+/** 契約から科目表示用のメタ情報（集約キーにも使う） */
+export function metaOf(c) {
+  return {
+    contractId: c.id,
+    assetClass: c.assetClass,
+    lesseeDept: c.lessee?.dept,
+    lessorIncClass: c.lessor?.incClass || 'sales',
+    lessorDepClass: c.lessor?.depClass || 'cogs',
+  };
+}
+
+/**
+ * 会社の税率・非支配株主持分比率（指定月時点。履歴の適用開始年月で切替）
+ * @param {object} co 会社
+ * @param {number} idx 月インデックス
+ * @param {'taxRate'|'nciRatio'} key
+ */
+export function rateAt(co, idx, key) {
+  if (!co) return 0;
+  let v = co[key] || 0;
+  for (const h of co.history || []) {
+    const [y, m] = h.fromYm.split('-').map(Number);
+    if (y * 12 + m - 1 <= idx) v = h[key] || 0;
+  }
+  return v;
 }

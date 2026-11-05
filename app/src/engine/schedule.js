@@ -30,7 +30,17 @@ export function validateContract(c, companies = []) {
   req(['jgaap', 'asc842ol', 'offbalance'].includes(l.model), '借手の会計モデルが不正です');
   req(Number.isFinite(l.rate) && l.rate >= 0 && l.rate < 1, '割引率は0以上1未満（例：0.03）で入力してください');
   req(Number.isFinite(l.idc ?? 0) && (l.idc ?? 0) >= 0, '初期直接費用は0以上です');
-  if (l.depMonths !== null && l.depMonths !== undefined) req(Number.isInteger(l.depMonths) && l.depMonths > 0, '償却月数は正の整数です');
+  if (l.depMonths !== null && l.depMonths !== undefined) {
+    req(Number.isInteger(l.depMonths) && l.depMonths > 0, '償却月数は正の整数です');
+    if (Number.isInteger(c.termMonths)) req(!(l.depMonths > c.termMonths), '償却月数がリース期間を超える契約（所有権移転・購入オプション行使が合理的に確実）は未対応です（今後対応）');
+  }
+  const K = Number.isInteger(c.termMonths) && [1, 3, 6, 12].includes(c.frequencyMonths) ? c.termMonths / c.frequencyMonths : null;
+  const froms = (c.steps || []).map((x) => x.fromPayment);
+  req(new Set(froms).size === froms.length, '段階賃料の開始回が重複しています');
+  if (K) req(froms.every((x) => x <= K), `段階賃料の開始回は支払回数（${K}回）以内にしてください`);
+  if (K) req((c.freePayments || 0) < K, 'フリーレント回数が支払回数以上です');
+  req(Number.isFinite(c.terminationPenalty ?? 0) && (c.terminationPenalty ?? 0) >= 0, '違約金は0以上です');
+  if (c.terminationPenalty > 0) req(!!c.terminationYm, '違約金は中途解約年月とあわせて入力してください');
   if (l.transition && l.transition.method === 'cumulative') {
     try {
       const t = ymToIndex(l.transition.ym);
@@ -50,8 +60,8 @@ export function validateContract(c, companies = []) {
   const r = c.lessor || {};
   req(Number.isFinite(r.assetCost ?? 0) && (r.assetCost ?? 0) >= 0, '貸手資産の取得原価は0以上です');
   req(Number.isFinite(r.ratio ?? 1) && (r.ratio ?? 1) > 0 && (r.ratio ?? 1) <= 1, '貸手資産の按分比率は0超1以下です');
-  if ((r.assetCost ?? 0) > 0) {
-    req(Number.isInteger(r.assetLifeMonths) && r.assetLifeMonths > 0, '貸手資産の耐用年数（月数）を入力してください');
+  if ((r.assetCost ?? 0) > 0 && c.assetClass !== 'land') {
+    req(Number.isInteger(r.assetLifeMonths) && r.assetLifeMonths > 0, '貸手資産の耐用年数（月数）を入力してください（土地は不要）');
     try { ymToIndex(r.assetStart); } catch { e.push('貸手資産の取得年月が不正です'); }
   }
   return e;
@@ -68,9 +78,9 @@ function paymentAmount(c, j) {
 }
 
 /**
- * 月次スケジュールを作成する。
+ * 月次スケジュールを作成する（計算量は契約月数に比例）。
  * @param {object} c 契約
- * @param {object} pol 会計方針（POL-10 割引率換算、POL-11 端数処理）
+ * @param {object} pol 会計方針（POL-10 割引率換算・期間内按分、POL-11 端数処理）
  */
 export function buildSchedule(c, pol = {}) {
   const rm = pol['POL-11'] || 'half_up';
@@ -82,6 +92,7 @@ export function buildSchedule(c, pol = {}) {
   const L = c.lessee;
   const termIdx = c.terminationYm ? ymToIndex(c.terminationYm) : null;
   const lastIdx = termIdx ?? s + N - 1;
+  const nominal = pol['POL-10'] !== 'effective';
 
   // 支払予定（契約上）
   const payments = [];
@@ -91,126 +102,117 @@ export function buildSchedule(c, pol = {}) {
     const t = c.timing === 'advance' ? month : month + 1;
     payments.push({ no: j, month, t, amount: paymentAmount(c, j) });
   }
-  const paid = payments.filter((p) => termIdx === null || p.month <= termIdx);
   const totalPayments = payments.reduce((a, p) => a + p.amount, 0);
+  const payByMonth = new Map();
+  for (const p of payments) if (termIdx === null || p.month <= termIdx) payByMonth.set(p.month, (payByMonth.get(p.month) || 0) + p.amount);
+  const penalty = termIdx !== null ? Math.max(0, c.terminationPenalty || 0) : 0;
 
   // ── 借手：リース負債 ──
   const transition = L.transition && L.transition.method === 'cumulative' ? L.transition : null;
   const measStart = transition ? ymToIndex(transition.ym) : s;
   const rate = transition ? transition.rate : L.rate;
-  const rp = pol['POL-10'] === 'effective' ? Math.pow(1 + rate, f / 12) - 1 : (rate * f) / 12;
-  const rmon = Math.pow(1 + rp, 1 / f) - 1; // 月次の複利換算率（支払期間内の按分に使用）
-  const g = (x) => (rmon === 0 ? x : Math.pow(1 + rmon, x) - 1);
+  // 期間（支払間隔f）あたりの利率
+  const rp = nominal ? (rate * f) / 12 : Math.pow(1 + rate, f / 12) - 1;
+  // len か月分の利率：名目＝単利按分、実効＝複利
+  const segFactor = (len) => (nominal ? (rp * len) / f : Math.pow(1 + rp, len / f) - 1);
 
   const months = [];
-  const meta = { start: s, end: lastIdx, measStart, N, f, K, rp, rate, payments, totalPayments, model: L.model };
+  const meta = { start: s, end: lastIdx, measStart, N, f, K, rp, rate, payments, totalPayments, model: L.model, nominal, penalty };
 
   const lesseeOnBalance = L.model === 'jgaap' || L.model === 'asc842ol';
   const remaining = payments.filter((p) => p.month >= measStart);
+  // 現在価値：後ろから順に割り戻す（前進計算と同じ利率規約）
+  let pv = 0;
+  for (let i = remaining.length - 1; i >= 0; i--) {
+    const p = remaining[i];
+    const prevT = i > 0 ? remaining[i - 1].t : measStart;
+    pv = (pv + p.amount) / (1 + segFactor(p.t - prevT));
+  }
+  meta.pvExact = lesseeOnBalance ? pv : 0;
   let L0 = 0;
   if (lesseeOnBalance) {
-    const pv = remaining.reduce((a, p) => a + p.amount / Math.pow(1 + rmon, p.t - measStart), 0);
     L0 = L.liabilityOverride !== null && L.liabilityOverride !== undefined && !transition ? L.liabilityOverride : R(pv);
   }
   meta.L0 = L0;
-  meta.pvExact = lesseeOnBalance ? remaining.reduce((a, p) => a + p.amount / Math.pow(1 + rmon, p.t - measStart), 0) : 0;
 
-  // 区間（支払時点間）の利息を計算し、最終支払で残高0となるよう最後の区間で調整
-  const points = remaining.filter((p) => termIdx === null || p.month <= termIdx);
-  const segs = []; // {ta, tb, base, interest}
+  // 区間（支払時点間）の利息。最終支払で残高0となるよう、最後の区間で端数を調整
+  const segs = [];
   if (lesseeOnBalance) {
     let B = L0;
     let ta = measStart;
     for (const p of remaining) {
       const len = p.t - ta;
-      const I = len > 0 ? R(B * g(len)) : 0;
-      segs.push({ ta, tb: p.t, base: B, interest: I, pay: p });
-      B = B + I - p.amount;
+      segs.push({ ta, tb: p.t, base: B, interest: len > 0 ? R(B * segFactor(len)) : 0, pay: p });
+      B = B + segs[segs.length - 1].interest - p.amount;
       ta = p.t;
     }
-    if (remaining.length) {
-      const eps = B; // 最終支払後の残差
-      // 最後に長さ>0の区間で調整
+    meta.finalResidual = remaining.length ? B : 0;
+    if (remaining.length && B !== 0) {
       for (let k = segs.length - 1; k >= 0; k--) {
-        if (segs[k].tb - segs[k].ta > 0) { segs[k].interest -= eps; break; }
+        if (segs[k].tb - segs[k].ta > 0) { segs[k].interest -= B; break; }
       }
-      // 基礎残高を再計算
-      let B2 = L0;
-      for (const sg of segs) { sg.base = B2; B2 = B2 + sg.interest - sg.pay.amount; sg.after = B2; }
-      meta.finalResidual = eps;
     }
+    let B2 = L0;
+    for (const sg of segs) { sg.base = B2; B2 = B2 + sg.interest - sg.pay.amount; sg.after = B2; }
   }
   meta.segments = segs;
-  const totalInterest = segs.reduce((a, x) => a + x.interest, 0);
-  meta.totalInterest = totalInterest;
+  meta.totalInterest = segs.reduce((a, x) => a + x.interest, 0);
 
-  // 時点tにおける累積利息（区間内の按分）
-  function cumInterestAt(t) {
-    let cum = 0;
-    for (const sg of segs) {
-      if (t >= sg.tb) cum += sg.interest;
-      else if (t > sg.ta) {
-        const len = sg.tb - sg.ta;
-        cum += R((sg.interest * g(t - sg.ta)) / g(len));
-        break;
-      } else break;
+  // 月ごとの利息（区間内の按分：名目＝定額、実効＝複利の累計で端数処理）
+  const monthInt = new Map();
+  for (const sg of segs) {
+    const len = sg.tb - sg.ta;
+    if (len <= 0) continue;
+    let prev = 0;
+    for (let k = 1; k <= len; k++) {
+      const cum = k === len ? sg.interest : nominal ? R((sg.interest * k) / len) : R((sg.interest * (Math.pow(1 + rp, k / f) - 1)) / (Math.pow(1 + rp, len / f) - 1 || 1));
+      const m = sg.ta + k - 1;
+      monthInt.set(m, (monthInt.get(m) || 0) + cum - prev);
+      prev = cum;
     }
-    return cum;
-  }
-  function cumPaidThroughMonth(m) {
-    // 月mの末日までに支払済みの額（前払は月初、後払は月末に支払）
-    let cum = 0;
-    for (const p of remaining) if (p.month <= m && (termIdx === null || p.month <= termIdx)) cum += p.amount;
-    return cum;
   }
 
   // ── 借手：使用権資産 ──
   const idc = L.model === 'jgaap' ? L.idc || 0 : 0;
   const C0 = L.model === 'jgaap' ? L0 + idc : L0;
   const depMonths = L.depMonths || s + N - measStart;
-  meta.C0 = C0;
-  meta.idc = idc;
-  meta.depMonths = depMonths;
-  meta.transferLike = depMonths > s + N - measStart;
+  Object.assign(meta, { C0, idc, depMonths, transferLike: depMonths > s + N - measStart });
 
   // ── 貸手 ──
   const r = c.lessor || {};
   const ratio = r.ratio ?? 1;
-  const aStart = r.assetCost > 0 ? ymToIndex(r.assetStart) : null;
-  function lessorAccAt(m) {
-    if (!(r.assetCost > 0)) return 0;
+  const depreciable = r.assetCost > 0 && c.assetClass !== 'land' && r.assetLifeMonths > 0;
+  const aStart = depreciable ? ymToIndex(r.assetStart) : null;
+  const lessorAccAt = (m) => {
+    if (!depreciable) return 0;
     const k = Math.min(Math.max(m - aStart + 1, 0), r.assetLifeMonths);
     return R((r.assetCost * k) / r.assetLifeMonths);
-  }
+  };
 
   const firstIdx = Math.min(s, measStart);
-  let prevL = 0, prevAcc = 0, prevCost = 0, prevX = 0, prevR = 0, prevIncCum = 0, prevCostCum = 0;
-  let prevIdcAcc = 0, prevLessorAcc = aStart !== null ? lessorAccAt(firstIdx - 1) : 0;
+  let prevL = 0, prevAcc = 0, prevIncCum = 0, prevCostCum = 0, prevIdcAcc = 0;
+  let prevLessorAcc = lessorAccAt(firstIdx - 1);
   let cashCumL = 0, cashCumR = 0, terminated = false;
 
   for (let m = firstIdx; m <= lastIdx; m++) {
     const rec = { m, ym: indexToYm(m), lessee: {}, lessor: {} };
-    const tEnd = m + 1;
-    const payInMonth = paid.filter((p) => p.month === m).reduce((a, p) => a + p.amount, 0);
+    const payInMonth = payByMonth.get(m) || 0;
     const lesseeActive = m >= measStart;
     const le = rec.lessee;
+    const lo = rec.lessor;
     le.active = lesseeActive;
     le.pay = lesseeActive ? payInMonth : 0;
-    // 貸手は契約開始から現金を受け取る（適用開始前の支払も含む）
-    const lo = rec.lessor;
-    lo.cash = payInMonth;
+    lo.cash = payInMonth; // 貸手は契約開始から受け取る（適用開始前の支払も含む）
 
     if (lesseeOnBalance && lesseeActive) {
       const commence = m === measStart;
       if (commence) le.commence = { L0, C0, idc };
-      const intCum = cumInterestAt(tEnd);
-      const intPrev = m === measStart ? 0 : cumInterestAt(m);
-      // 日本基準・IFRS：支払利息として計上／ASC842オペ：単一リース費用に含まれるため accr（利息相当の増加）として保持
-      if (L.model === 'jgaap') { le.int = intCum - intPrev; le.accr = 0; } else { le.int = 0; le.accr = intCum - intPrev; }
+      const mi = monthInt.get(m) || 0;
+      // 日本基準・IFRS：支払利息／ASC842オペ：単一リース費用に含まれるため accr（利息相当の増加）として保持
+      if (L.model === 'jgaap') { le.int = mi; le.accr = 0; } else { le.int = 0; le.accr = mi; }
       cashCumL += le.pay;
-      const Lend = L0 + intCum - cumPaidThroughMonth(m);
       le.L_open = commence ? 0 : prevL;
-      le.L_end = Lend;
+      le.L_end = (commence ? L0 : prevL) + mi - le.pay;
       if (L.model === 'jgaap') {
         const k = Math.min(m - measStart + 1, depMonths);
         const acc = R((C0 * k) / depMonths);
@@ -222,81 +224,67 @@ export function buildSchedule(c, pol = {}) {
         le.idcAcc_end = idcAcc;
         prevIdcAcc = idcAcc;
       } else {
-        // ASC842 オペレーティング・リース：単一リース費用（定額）、使用権資産はリース負債からの差額
-        const k = m - s + 1;
-        const costCum = R((totalPayments * k) / N);
+        // ASC842 オペレーティング・リース：単一リース費用（定額）、使用権資産＝リース負債＋支払累計−費用累計
+        const costCum = R((totalPayments * (m - s + 1)) / N);
         le.cost = costCum - prevCostCum;
         prevCostCum = costCum;
-        le.cost_end = Lend + cashCumL - costCum; // 使用権資産（純額）
+        le.cost_end = le.L_end + cashCumL - costCum;
         le.acc_end = 0;
         le.dep = 0;
       }
       le.X_end = 0;
     } else if (L.model === 'offbalance' && lesseeActive) {
       // 短期・少額リース等：借手はオフバランス、費用は定額
-      const k = m - s + 1;
-      const expCum = R((totalPayments * k) / N);
+      const expCum = R((totalPayments * (m - s + 1)) / N);
       le.cost = expCum - prevCostCum;
       prevCostCum = expCum;
       cashCumL += le.pay;
-      le.X_end = expCum - cashCumL; // 未払リース料（＋）／前払（−）
-      le.L_end = 0; le.L_open = 0; le.int = 0; le.dep = 0; le.cost_end = 0; le.acc_end = 0;
+      Object.assign(le, { X_end: expCum - cashCumL, L_end: 0, L_open: 0, int: 0, accr: 0, dep: 0, cost_end: 0, acc_end: 0 });
     } else {
-      Object.assign(le, { L_end: 0, L_open: 0, int: 0, dep: 0, cost_end: 0, acc_end: 0, X_end: 0, cost: 0 });
+      Object.assign(le, { L_end: 0, L_open: 0, int: 0, accr: 0, dep: 0, cost_end: 0, acc_end: 0, X_end: 0, cost: 0 });
     }
 
     // 貸手：受取リース料（定額法）
-    const kR = m - s + 1;
-    const incCum = R((totalPayments * kR) / N);
+    const incCum = R((totalPayments * (m - s + 1)) / N);
     lo.inc = incCum - prevIncCum;
     cashCumR += lo.cash;
     lo.R_end = incCum - cashCumR;
     prevIncCum = incCum;
 
-    // 貸手資産の減価償却（按分比率適用前の全体額と按分後）
-    if (aStart !== null) {
-      const acc = lessorAccAt(m);
-      lo.assetDep = acc - prevLessorAcc;
-      lo.assetAcc_end = acc;
-      lo.assetCost = r.assetCost;
-      prevLessorAcc = acc;
-    } else { lo.assetDep = 0; lo.assetAcc_end = 0; lo.assetCost = 0; }
+    // 貸手資産の減価償却（按分比率適用前の全体額。土地は非償却）
+    const accL = lessorAccAt(m);
+    lo.assetDep = accL - prevLessorAcc;
+    lo.assetAcc_end = accL;
+    lo.assetCost = r.assetCost > 0 ? r.assetCost : 0;
+    prevLessorAcc = accL;
     lo.ratio = ratio;
 
     // 中途解約・満了
     const isTerm = termIdx !== null && m === termIdx;
     const isExpiry = termIdx === null && m === s + N - 1;
-    if (isTerm || (isExpiry && L.derecognizeAtExpiry !== false && !meta.transferLike)) {
+    if (isTerm || isExpiry) {
       const rouNet = (le.cost_end || 0) - (le.acc_end || 0);
       le.term = {
         kind: isTerm ? 'termination' : 'expiry',
-        L: le.L_end || 0,
-        cost: le.cost_end || 0,
-        acc: le.acc_end || 0,
-        X: le.X_end || 0,
-        idcAcc: le.idcAcc_end || 0,
-        gain: (le.L_end || 0) + (le.X_end || 0) - rouNet, // ＋＝解約益
+        L: le.L_end || 0, cost: le.cost_end || 0, acc: le.acc_end || 0, X: le.X_end || 0, idcAcc: le.idcAcc_end || 0,
+        gain: (le.L_end || 0) + (le.X_end || 0) - rouNet, // ＋＝解約益（違約金は別建て）
       };
       if (isTerm) {
         // 貸手は定額法による未収（前受）を解約時に取り崩す（受取リース料の修正）
         lo.termAdj = -lo.R_end;
         lo.inc += lo.termAdj;
         lo.R_end = 0;
+        if (penalty) { le.penalty = penalty; lo.penalty = penalty; }
       }
       le.L_end = 0; le.cost_end = 0; le.acc_end = 0; le.X_end = 0; le.idcAcc_end = 0;
       terminated = true;
     }
     prevL = le.L_end || 0;
     prevAcc = le.acc_end || 0;
-    prevCost = le.cost_end || 0;
-    prevX = le.X_end || 0;
-    prevR = lo.R_end;
     months.push(rec);
   }
-  meta.terminated = terminated;
-  meta.firstIdx = firstIdx;
-  meta.lastIdx = lastIdx;
-  return { contract: c, meta, months, byIndex: (i) => months.find((x) => x.m === i) || null };
+  Object.assign(meta, { terminated, firstIdx, lastIdx, payByMonth });
+  return { contract: c, meta, months, byIndex: (i) => (i >= firstIdx && i <= lastIdx ? months[i - firstIdx] : null) };
 }
 
 /**
@@ -310,8 +298,8 @@ export function currentPortion(sched, endIdx) {
   if (!rec || !rec.lessee.active) return 0;
   const Lend = rec.lessee.L_end;
   if (!Lend) return 0;
-  const term = sched.contract.terminationYm ? ymToIndex(sched.contract.terminationYm) : null;
-  const within = meta.segments.filter((sg) => sg.pay.month > endIdx && sg.pay.month <= endIdx + 12 && (term === null || sg.pay.month <= term));
+  // 中途解約は解約月に発生する事象として扱い、それ以前の決算日では契約上の支払予定で区分する（借手の個別帳簿と同じ前提）
+  const within = meta.segments.filter((sg) => sg.pay.month > endIdx && sg.pay.month <= endIdx + 12);
   if (!within.length) return 0;
   const last = within[within.length - 1];
   return Lend - last.after;

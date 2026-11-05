@@ -1,10 +1,10 @@
-import { h, card, select, download, table, amt } from '../dom.js';
+import { h, card, select, download, toast } from '../dom.js';
 import { journalCard, kpi, emptyState } from '../components.js';
-import { state } from '../store.js';
+import { update } from '../store.js';
 import { TEMPLATES } from '../../engine/elimination.js';
 import { accountLabel, ACCOUNTS } from '../../engine/accounts.js';
-import { toCsv } from '../../engine/data.js';
-import { fmt } from '../../engine/util.js';
+import { toCsv, sanitizeManual } from '../../engine/data.js';
+import { fmt, indexToYm } from '../../engine/util.js';
 
 const filter = { kind: 'all', contract: 'all', tpl: 'all', account: '' };
 
@@ -47,7 +47,60 @@ export function renderJournals(ctx) {
       kpi('法人税等調整額', fmt(tax), '＋は税金費用の増加')),
     card(null, controls),
     card('T勘定ビュー', tSel, tView),
+    manualCard(ctx),
     js.length ? h('div', { class: 'journals' }, js.map((j) => journalCard(j, { pol, names, companies }))) : card(null, emptyState('該当する仕訳はありません')));
+}
+
+/** 手入力仕訳（理由必須・監査ログ記録） */
+function manualCard(ctx) {
+  const { data, period, companies } = ctx;
+  const draft = { title: '', contractId: '', kind: 'CON', reason: '', evidence: '', lines: [{ acc: 'MANUAL', label: '', co: 'CONSOL', dr: '', cr: '' }, { acc: 'MANUAL', label: '', co: 'CONSOL', dr: '', cr: '' }] };
+  const accOpts = [['MANUAL', '（科目名を入力）'], ...Object.entries(ACCOUNTS).filter(([k]) => k !== 'MANUAL').map(([k, v]) => [k, v.name])];
+  const coOpts = [['CONSOL', '連結'], ...companies.map((c) => [c.code, `${c.code} ${c.name}`])];
+  const body = h('tbody');
+  const bal = h('span', { class: 'muted' });
+  const recalc = () => {
+    const d = draft.lines.reduce((a, l) => a + (Number(l.dr) || 0), 0), c = draft.lines.reduce((a, l) => a + (Number(l.cr) || 0), 0);
+    bal.textContent = `借方 ${fmt(d)} ／ 貸方 ${fmt(c)} ${d === c && d > 0 ? '（一致）' : '（不一致）'}`;
+  };
+  const drawRows = () => {
+    body.replaceChildren(...draft.lines.map((l, i) => h('tr', null,
+      h('td', null, select(accOpts, l.acc, (v) => { l.acc = v; })),
+      h('td', null, h('input', { type: 'text', maxlength: 60, value: l.label, placeholder: '手入力科目のときの科目名', 'aria-label': '科目名', on: { input: (e) => { l.label = e.target.value; } } })),
+      h('td', null, select(coOpts, l.co, (v) => { l.co = v; })),
+      h('td', null, h('input', { type: 'number', min: 0, step: 1, value: l.dr, 'aria-label': '借方', on: { input: (e) => { l.dr = e.target.value; recalc(); } } })),
+      h('td', null, h('input', { type: 'number', min: 0, step: 1, value: l.cr, 'aria-label': '貸方', on: { input: (e) => { l.cr = e.target.value; recalc(); } } })),
+      h('td', null, h('button', { class: 'btn-link danger', type: 'button', on: { click: () => { draft.lines.splice(i, 1); drawRows(); recalc(); } } }, '削除')))));
+  };
+  drawRows();
+  recalc();
+  const save = () => {
+    const lines = draft.lines.map((l) => ({ acc: l.acc, label: l.acc === 'MANUAL' ? l.label.trim() : '', co: l.co, amt: Math.round((Number(l.dr) || 0) - (Number(l.cr) || 0)) })).filter((l) => l.amt);
+    const total = lines.reduce((a, l) => a + l.amt, 0);
+    if (!draft.reason.trim()) return toast('理由は必須です', 'error');
+    if (lines.length < 2 || total !== 0) return toast('借方と貸方の合計が一致していません', 'error');
+    if (lines.some((l) => l.acc === 'MANUAL' && !l.label)) return toast('手入力科目の科目名を入力してください', 'error');
+    const m = sanitizeManual({ id: `M-${Date.now()}`, periodStart: indexToYm(period.start), periodEnd: indexToYm(period.end), contractId: draft.contractId, title: draft.title || '手入力仕訳', reason: draft.reason, evidence: draft.evidence, createdAt: new Date().toISOString(), lines });
+    update((d) => { d.manualJournals = [...(d.manualJournals || []), m]; }, '手入力仕訳追加', `${period.label} ${m.title}：${m.reason}`);
+    toast('手入力仕訳を追加しました');
+  };
+  const existing = (data.manualJournals || []).filter((m) => m.periodStart === indexToYm(period.start) && m.periodEnd === indexToYm(period.end));
+  return card('手入力仕訳（理由必須・監査ログに記録）',
+    h('p', { class: 'help' }, '自動作成の対象外の調整（棚卸資産に含まれる償却費、変動リース料・非リース構成部分、決算日差異の調整など）を入力します。選択中の期間に計上され、精算表・検算・期間確定の対象になります。'),
+    existing.length ? h('ul', null, existing.map((m) => h('li', null, `${m.title}（${m.reason}）`, ' ', h('button', { class: 'btn-link danger', type: 'button', on: { click: () => {
+      const why = prompt('削除する理由を入力してください（監査ログに記録されます）');
+      if (!why || !why.trim()) return;
+      update((d) => { d.manualJournals = d.manualJournals.filter((x) => x.id !== m.id); }, '手入力仕訳削除', `${m.title}：${why.trim().slice(0, 200)}`);
+    } } }, '削除')))) : null,
+    h('details', null, h('summary', null, '手入力仕訳を追加する'),
+      h('div', { class: 'form-grid' },
+        h('div', { class: 'field' }, h('label', null, '摘要'), h('input', { type: 'text', maxlength: 100, on: { input: (e) => { draft.title = e.target.value; } } })),
+        h('div', { class: 'field' }, h('label', null, '関連する契約（任意）'), select([['', '—'], ...data.contracts.map((c) => [c.id, `${c.id} ${c.name}`])], '', (v) => { draft.contractId = v; })),
+        h('div', { class: 'field' }, h('label', null, '理由（必須）'), h('input', { type: 'text', maxlength: 1000, on: { input: (e) => { draft.reason = e.target.value; } } })),
+        h('div', { class: 'field' }, h('label', null, '証憑・計算資料'), h('input', { type: 'text', maxlength: 300, on: { input: (e) => { draft.evidence = e.target.value; } } }))),
+      h('div', { class: 'table-wrap' }, h('table', { class: 'tbl compact' }, h('thead', null, h('tr', null, ['科目', '科目名（手入力科目）', '会社', '借方', '貸方', ''].map((t) => h('th', null, t)))), body)),
+      h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', on: { click: () => { draft.lines.push({ acc: 'MANUAL', label: '', co: 'CONSOL', dr: '', cr: '' }); drawRows(); } } }, '＋ 行を追加'), bal,
+        h('button', { class: 'btn primary', type: 'button', on: { click: save } }, '保存'))));
 }
 
 function exportCsv(js, ctx) {

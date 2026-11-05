@@ -26,7 +26,7 @@ export function renderData(ctx) {
       toast(`読み込めませんでした：${err.message}`, 'error');
     }
   } } });
-  const chain = verifyChain(data.auditLog);
+  const chain = verifyChain(data.auditLog, data.auditAnchor);
   const names = { ...data.config.accountNames };
   const nameRows = Object.entries(ACCOUNTS).map(([k, v]) => ({ k, v }));
   return h('div', { class: 'page' },
@@ -45,6 +45,6 @@ export function renderData(ctx) {
       h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', on: { click: () => update((d) => { d.config.accountNames = Object.fromEntries(Object.entries(names).map(([k, v]) => [k, String(v).slice(0, 60)])); }, '科目名変更', `${Object.keys(names).length}件`) } }, '科目名を保存'))),
     card('監査ログ（変更履歴）',
       h('p', null, '検証：', chain.ok ? statusBadge('ok', `改ざんなし（${data.auditLog.length}件の連鎖ハッシュが一致）`) : statusBadge('ng', `${chain.index + 1}件目以降で不一致（ログが編集された可能性）`)),
-      h('p', { class: 'help' }, '各記録は直前の記録のハッシュ値を含みます（簡易的な改ざん検知。暗号学的な保証ではありません）。'),
+      h('p', { class: 'help' }, '各記録は直前の記録のハッシュ値を含みます。途中の記録の書換え・削除は検知できますが、末尾の削除や全体の作り直しは検知できない簡易的な仕組みです（暗号学的な保証ではありません）。操作者名は記録しません（端末内で使う前提のため）。'),
       table([{ label: '日時', render: (e) => new Date(e.at).toLocaleString('ja-JP') }, { label: '操作', key: 'action' }, { label: '内容', key: 'detail' }, { label: 'ハッシュ', key: 'hash' }], [...data.auditLog].reverse().slice(0, 300), { className: 'compact' })));
 }

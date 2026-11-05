@@ -166,3 +166,70 @@ test('会計方針：不正な保存値は既定値に戻る', () => {
   assert.equal(p['POL-01'], 'none');
   assert.equal(p['POL-02'], 'reverse');
 });
+
+test('ASC842オペの当初負債＝年金現価（四半期300×16回、1%/四半期）を手計算と照合', () => {
+  const c = data.contracts.find((x) => x.id === 'K-004');
+  const s = buildSchedule(c, pol);
+  const expected = Math.round(300 * (1 - Math.pow(1.01, -16)) / 0.01);
+  assert.equal(s.meta.L0, expected);
+});
+
+test('中途解約：違約金は連結上相殺され、解約後の消去残高・税効果・非支配株主持分は0', () => {
+  const p = buildPeriods(ymToIndex('2029-04'), ymToIndex('2030-03'), 3)[0];
+  const g = generateAll(data, p, pol);
+  const r = g.results.find((x) => x.contract.id === 'K-006');
+  const c17 = g.journals.find((j) => j.contractId === 'K-006' && j.tpl === 'C-17');
+  const n = net(c17);
+  assert.equal(n.PENALTY_INC, 60);
+  assert.equal(n.PENALTY_EXP, -60);
+  assert.equal(r.E.close.S2, 0);
+  assert.equal(r.DT.close.S2, 0);
+  assert.equal(r.NCI.close.S2, 0);
+});
+
+test('税率変更の影響は当期の法人税等調整額、期首は前期末の税率', () => {
+  const d = JSON.parse(JSON.stringify(data));
+  d.companies.find((x) => x.code === 'S1').history = [{ fromYm: '2028-04', taxRate: 0.35, nciRatio: 0 }];
+  const g2 = generateAll({ ...d, contracts: [k001] }, FY[1], pol);
+  const t = (tpl) => net(g2.journals.find((j) => j.tpl === tpl));
+  assert.deepEqual(t('C-01T'), { RE_OPEN: 16, DTA: -16 }); // 53 × 30%
+  assert.deepEqual(t('C-13'), { TAX_ADJ: Math.round(81 * 0.35) - 16, DTA: -(Math.round(81 * 0.35) - 16) });
+});
+
+test('持分比率の変動は資本剰余金（資本取引）で処理', () => {
+  const d = JSON.parse(JSON.stringify(data));
+  d.companies.find((x) => x.code === 'S1').nciRatio = 0.4;
+  d.companies.find((x) => x.code === 'S1').history = [{ fromYm: '2028-04', taxRate: 0.3, nciRatio: 0.2 }];
+  const g2 = generateAll({ ...d, contracts: [k001] }, FY[1], pol);
+  const c14 = net(g2.journals.find((j) => j.tpl === 'C-14'));
+  // 期首：(53−16)×40%＝15、期末：(81−24)×20%＝11、当期損益分：((81−24)−(53−16))×20%＝4、資本剰余金：11−15−4＝△8
+  assert.equal(c14.NCI_PL, 4);
+  assert.equal(c14.CAP_SURPLUS, -8);
+});
+
+test('旧科目名＋流動区分ありの借手でも、連結後の流動・固定は0', () => {
+  const d = JSON.parse(JSON.stringify(data));
+  d.companies.find((x) => x.code === 'S1').legacyAccounts = true;
+  for (const p of FY) {
+    const g = generateAll(d, p, pol);
+    const ws = worksheet(g, d.companies, pol, {}, p);
+    for (const r of ws) if (MUST_BE_ZERO.includes(r.acc)) assert.equal(r.consol, 0, `${p.label} ${r.label}`);
+  }
+});
+
+test('JSON取込：__proto__ を含むデータでプロトタイプ汚染が起きず、重複番号・不正コードは拒否', () => {
+  const raw = JSON.parse('{"companies":[{"code":"P","name":"P","__proto__":{"polluted":1}}],"contracts":[],"__proto__":{"polluted2":1}}');
+  sanitizeData(raw);
+  assert.equal({}.polluted, undefined);
+  assert.equal({}.polluted2, undefined);
+  assert.throws(() => sanitizeData({ companies: [{ code: '__proto__' }], contracts: [] }));
+  assert.throws(() => sanitizeData({ companies: [{ code: 'P' }], contracts: [{ id: 'A' }, { id: 'A' }] }));
+});
+
+test('土地（非償却）の貸手資産は減価償却費0、組替は取得原価のみ', () => {
+  const c = { ...JSON.parse(JSON.stringify(k001)), id: 'L-1', assetClass: 'land', lessor: { assetId: 'LAND', assetCost: 9000, assetLifeMonths: 0, assetStart: null, ratio: 1, incClass: 'sales', depClass: 'cogs' } };
+  assert.deepEqual(validateContract(c, data.companies), []);
+  const g = generateAll({ ...data, contracts: [c] }, FY[0], pol);
+  assert.deepEqual(net(g.journals.find((j) => j.tpl === 'C-11')), { RECLASS_ASSET: 9000, RENTAL_ASSET: -9000 });
+  assert.equal(g.journals.find((j) => j.tpl === 'C-12'), undefined);
+});

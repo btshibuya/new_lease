@@ -12,8 +12,8 @@ export function renderWorksheet(ctx) {
   const ws = worksheet(gen, companies, pol, names, period);
   const cols = [
     { label: '科目', render: (r) => h('td', null, r.label, MUST_BE_ZERO.includes(r.acc) ? h('span', { class: 'co' }, 'グループ内：連結後0') : null) },
-    { label: '借手（個別）', num: true, key: 'lessee' },
-    { label: '貸手（個別）', num: true, key: 'lessor' },
+    { label: '借手個別（アプリ計算値）', num: true, key: 'lessee' },
+    { label: '貸手個別（アプリ計算値）', num: true, key: 'lessor' },
     { label: '単純合算', num: true, key: 'simple' },
     { label: '個社修正', num: true, key: 'ind' },
     { label: '連結修正', num: true, key: 'con' },
@@ -38,7 +38,7 @@ export function renderWorksheet(ctx) {
   const cf = cashFlowEliminations(gen, pol, period);
   const mat = maturity(gen, period);
 
-  const exportWs = () => download(`連結精算表_${period.label}.csv`, toCsv([['科目', '借手（個別）', '貸手（個別）', '単純合算', '個社修正', '連結修正', '連結'], ...ws.map((r) => [r.label, r.lessee, r.lessor, r.simple, r.ind, r.con, r.consol])]), 'text/csv;charset=utf-8');
+  const exportWs = () => download(`連結精算表_${period.label}.csv`, toCsv([['科目', '借手個別（アプリ計算値）', '貸手個別（アプリ計算値）', '単純合算', '個社修正', '連結修正', '連結'], ...ws.map((r) => [r.label, r.lessee, r.lessor, r.simple, r.ind, r.con, r.consol])]), 'text/csv;charset=utf-8');
 
   return h('div', { class: 'page' },
     h('h1', null, `連結精算表・連結CF・注記（${period.label}）`),
@@ -52,5 +52,5 @@ export function renderWorksheet(ctx) {
       card('連結キャッシュ・フロー計算書の消去データ', table([
         { label: '区分', key: 'section' }, { label: '項目', key: 'label' }, { label: '個別計上額', key: 'amount', num: true }, { label: '消去額', key: 'elim', num: true },
       ], cf.items), h('p', { class: 'help' }, `借手の支払と貸手の受取は連結上相殺されます（差額 ${fmt(cf.check)}）。利息の支払額の区分は会計方針 POL-09 に従います。`)),
-      card(null, barChart({ title: 'リース負債の満期分析：グループ内消去額（割引前）', subtitle: '連結の注記（満期分析）から差し引く金額', labels: mat.map((m) => m.label), series: [{ name: '将来のリース料（割引前）', values: mat.map((m) => m.amount), color: COLORS.lessee }], unit, height: 240 }))));
+      card(null, barChart({ title: 'リース負債の返済予定：グループ内消去額', subtitle: '割引前のリース料（満期分析）と元本ベース（附属明細表の返済予定額）。開示様式に合わせて使い分けてください', labels: mat.map((m) => m.label), series: [{ name: '割引前のリース料', values: mat.map((m) => m.amount), color: COLORS.lessee }, { name: '元本（リース負債の減少額）', values: mat.map((m) => m.principal), color: 'var(--s7)' }], unit, height: 260 }))));
 }

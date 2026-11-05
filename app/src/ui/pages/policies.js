@@ -4,37 +4,42 @@ import { barChart } from '../charts.js';
 import { state, update } from '../store.js';
 import { POLICIES, defaultPolicies } from '../../engine/policies.js';
 import { generateAll } from '../../engine/elimination.js';
+import { buildSchedule } from '../../engine/schedule.js';
 import { cashFlowEliminations, worksheet } from '../../engine/reports.js';
-import { buildPeriods, ymToIndex, fmt } from '../../engine/util.js';
+import { buildPeriods, ymToIndex } from '../../engine/util.js';
 
 /** 設例用のデータ（親会社P→60%子会社S、5年・年1回後払1,000、割引率3%） */
 function demoData(kind) {
+  const monthly = kind === 'rate' || kind === 'rounding';
   return {
     config: { unit: '千円', fyeMonth: 3, accountNames: {} },
     companies: [
       { code: 'P', name: '親会社P', isParent: true, fyeMonth: 3, taxRate: 0.3, nciRatio: 0, taxEffect: true },
-      { code: 'S', name: '子会社S（60%）', fyeMonth: 3, taxRate: 0.3, nciRatio: 0.4, taxEffect: true, splitsCurrent: true },
+      { code: 'S', name: kind === 'asc842' ? '在外子会社S（60%・US GAAP）' : '子会社S（60%）', fyeMonth: 3, taxRate: 0.3, nciRatio: 0.4, taxEffect: true, splitsCurrent: true },
     ],
     contracts: [{
-      id: '設例', name: '設例', lessorCo: 'P', lesseeCo: 'S', assetClass: 'building', commencement: '2027-04', termMonths: 60, frequencyMonths: 12, timing: 'arrears', payment: 1000, freePayments: 0, steps: [], terminationYm: null,
-      lessee: { model: 'jgaap', rate: 0.03, idc: kind === 'idc' ? 100 : 0, dept: kind === 'depReclass' ? 'mfg' : 'sga', liabilityOverride: null, depMonths: null, derecognizeAtExpiry: true, transition: { method: 'none' } },
+      id: '設例', name: '設例', lessorCo: 'P', lesseeCo: 'S', assetClass: 'building', commencement: '2027-04', termMonths: 60,
+      frequencyMonths: monthly ? 1 : kind === 'asc842' ? 3 : 12, timing: 'arrears', payment: monthly ? 100 : kind === 'asc842' ? 250 : 1000, freePayments: 0, steps: [], terminationYm: null,
+      lessee: { model: kind === 'asc842' ? 'asc842ol' : 'jgaap', rate: 0.03, idc: kind === 'idc' ? 100 : 0, dept: kind === 'depReclass' ? 'mfg' : 'sga', liabilityOverride: null, depMonths: null, transition: { method: 'none' } },
       lessor: { assetId: 'A', assetCost: 6000, assetLifeMonths: 120, assetStart: '2027-04', ratio: 1, incClass: kind === 'depReclass' ? 'nonop' : 'sales', depClass: kind === 'depReclass' ? 'nonop' : 'cogs' },
       actuals: {},
     }],
+    manualJournals: [],
   };
 }
 const FY = buildPeriods(ymToIndex('2027-04'), ymToIndex('2032-03'), 3, 'year');
+const DEMO_NOTE = { idc: '、初期直接費用100', rate: '（月払100）', rounding: '（月払100）', asc842: '（四半期払250、借手はASC842）' };
 
 const TPLS = {
   nci: ['C-01N', 'C-14', 'C-BN'], tax: ['C-01T', 'C-13', 'C-BT'], format: null, reclass: ['C-11'], depReclass: ['C-12'],
-  presentation: ['C-01', 'C-03'], idc: ['C-02', 'C-03'], cf: [],
+  presentation: ['C-01', 'C-03'], idc: ['C-02', 'C-03'], cf: [], asc842: ['C-02', 'C-04'],
 };
+
+const sum = (o) => Object.values(o).reduce((a, v) => a + v, 0);
 
 function yearlyEffects(d, pol) {
   return FY.map((p) => {
-    const g = generateAll(d, p, pol);
-    const r = g.results[0];
-    const sum = (o) => Object.values(o).reduce((a, v) => a + v, 0);
+    const r = generateAll(d, p, pol).results[0];
     const pre = sum(r.E.close) - sum(r.E.open);
     const tax = sum(r.DT.close) - sum(r.DT.open);
     const nci = sum(r.NCI.close) - sum(r.NCI.open);
@@ -42,29 +47,92 @@ function yearlyEffects(d, pol) {
   });
 }
 
-function exampleFor(def, ctx) {
+/** 自社データ（選択中の期間）で、選択肢ごとの影響額を比較 */
+function impactTable(def, ctx) {
+  const { data, period } = ctx;
+  if (!data.contracts.length) return null;
+  const needFresh = ['POL-10', 'POL-11'].includes(def.id);
+  const rows = def.options.map((o) => {
+    const pol = { ...state.policies, [def.id]: o.value };
+    const g = generateAll(data, period, pol, needFresh ? {} : { schedCache: ctx.schedCache });
+    const pre = g.results.reduce((a, r) => a + sum(r.E.close) - sum(r.E.open), 0);
+    const tax = g.results.reduce((a, r) => a + sum(r.DT.close) - sum(r.DT.open), 0);
+    const nci = g.results.reduce((a, r) => a + sum(r.NCI.close) - sum(r.NCI.open), 0);
+    const eq = g.results.reduce((a, r) => a + sum(r.E.close) - sum(r.DT.close), 0);
+    return { label: o.label, cur: o.value === state.policies[def.id], pre, tax, parent: pre - tax - nci, nci, eq, n: g.journals.length };
+  });
+  const base = rows.find((r) => r.cur);
+  return h('div', { class: 'impact' },
+    table([
+      { label: '選択肢', render: (r) => h('td', null, r.label, r.cur ? h('span', { class: 'co' }, '選択中') : null) },
+      { label: '連結損益への影響（税引前）', key: 'pre', num: true },
+      { label: '法人税等調整額', key: 'tax', num: true },
+      { label: '非支配株主に帰属', key: 'nci', num: true },
+      { label: '親会社株主に帰属', key: 'parent', num: true },
+      { label: '期末の純資産への影響（税引後）', key: 'eq', num: true },
+      { label: '選択中との差（親会社株主帰属）', num: true, render: (r) => r.parent - base.parent },
+      { label: '仕訳本数', key: 'n', num: true },
+    ], rows, { className: 'compact' }));
+}
+
+/** 開いたときに初めて計算する折りたたみ（画面の初期表示を速くする） */
+function lazyDetails(cls, title, build) {
+  const d = h('details', { class: cls }, h('summary', null, title));
+  let done = false;
+  d.addEventListener('toggle', () => {
+    if (!d.open || done) return;
+    done = true;
+    try { d.append(build()); } catch (e) { d.append(h('div', { class: 'error' }, `計算できませんでした：${e.message}`)); }
+  });
+  return d;
+}
+
+function textExample(title, ...body) {
+  return h('details', { class: 'example' }, h('summary', null, title), h('div', { class: 'ex-text' }, ...body));
+}
+
+function exampleFor(def) {
   if (def.example === 'none') return null;
+  if (def.example === 'fye') {
+    return textExample('設例で選択肢を比較する',
+      h('p', null, '設例：連結決算日3月末、借手の子会社は12月決算。2028年2月に新規のグループ内リース（負債1,000）を開始。'),
+      table([{ label: '選択肢', key: 'a' }, { label: '子会社の数値の基準日', key: 'b' }, { label: '2月開始の契約の扱い', key: 'c' }], [
+        { a: '重要な不一致のみ調整（既定）', b: '12月末（正規決算）', c: '借手の12月末の帳簿には未計上、貸手（3月決算）は2〜3月の受取リース料を計上 → 重要な不一致として調整（貸手側の計上を取り消す等）' },
+        { a: '仮決算', b: '3月末', c: '両社とも3月末の数値で消去するため不一致は生じない' },
+        { a: '調整しない', b: '12月末', c: '不一致は連結上残る（重要性が乏しい場合のみ）' },
+      ], { className: 'compact' }));
+  }
+  if (def.example === 'inventory') {
+    return textExample('設例で選択肢を比較する',
+      h('p', null, '設例：借手（製造子会社）の使用権資産の償却費 年1,000、貸手の減価償却費（連結上の原価）年600。期末在庫に含まれる製造原価の割合 10%。'),
+      table([{ label: '項目', key: 'a' }, { label: '金額', key: 'b', num: true }], [
+        { a: '借手が原価に算入した償却費のうち期末在庫に含まれる額（1,000×10%）', b: 100 },
+        { a: '連結上の原価（貸手の減価償却費）のうち期末在庫に含まれるべき額（600×10%）', b: 60 },
+        { a: '棚卸資産の修正額（連結上の在庫を減額）', b: -40 },
+      ], { className: 'compact' }),
+      h('p', { class: 'help' }, '「手入力で調整」の場合は、仕訳画面の手入力仕訳で（借）売上原価 40 ／（貸）棚卸資産 40 のように計上します（翌期は戻し）。'));
+  }
+  return lazyDetails('example', '設例で選択肢を比較する（仕訳例・グラフ）', () => exampleGrid(def));
+}
+
+function exampleGrid(def) {
   const d = demoData(def.example);
-  const jctx = { pol: null, names: {}, companies: d.companies };
   const cols = def.options.map((o) => {
     const pol = { ...state.policies, [def.id]: o.value };
-    const per = def.example === 'idc' ? FY[0] : FY[1];
+    const per = def.example === 'idc' || def.example === 'asc842' ? FY[0] : FY[1];
     const g = generateAll(d, per, pol);
     const want = TPLS[def.example];
-    const js = want === null ? g.journals.filter((j) => j.kind === 'CON') : g.journals.filter((j) => want.includes(j.tpl));
+    const js = want === null ? g.journals.filter((j) => j.kind === 'CON') : want ? g.journals.filter((j) => want.includes(j.tpl)) : [];
     const parts = [h('div', { class: 'ex-head' }, h('span', { class: 'ex-opt' }, o.label), o.value === def.default ? statusBadge('ok', '既定値') : null)];
-    parts.push(h('div', { class: 'muted small' }, `仕訳例：${per.label}（設例：親会社P→60%子会社S、5年、年額1,000、割引率3%${def.example === 'idc' ? '、初期直接費用100' : ''}）`));
-    if (js.length) js.forEach((j) => parts.push(journalCard(j, { ...jctx, pol }, { hideContract: true, noBasis: true })));
-    else if (def.example !== 'cf') parts.push(h('div', { class: 'empty small' }, 'この選択肢では該当する仕訳は作成されません'));
+    parts.push(h('div', { class: 'muted small' }, `${per.label}（設例：親会社P→60%子会社S、5年、割引率3%${DEMO_NOTE[def.example] || '、年額1,000'}）`));
+    const jctx = { pol, names: {}, companies: d.companies };
+    if (js.length) js.forEach((j) => parts.push(journalCard(j, jctx, { hideContract: true, noBasis: true })));
+    else if (want && want.length) parts.push(h('div', { class: 'empty small' }, 'この選択肢では該当する仕訳は作成されません'));
     if (['nci', 'tax', 'idc'].includes(def.example)) {
       const ye = yearlyEffects(d, pol);
-      if (def.example === 'nci') {
-        parts.push(barChart({ title: '年度別：消去による損益影響（税引後）の帰属', labels: ye.map((r) => r.label), series: [{ name: '親会社株主', values: ye.map((r) => r.parent), color: COLORS.lessee }, { name: '非支配株主', values: ye.map((r) => r.nci), color: COLORS.lessor }], stacked: true, height: 220 }));
-      } else if (def.example === 'tax') {
-        parts.push(table([{ label: '年度', key: 'label' }, { label: '税引前影響', key: 'pre', num: true }, { label: '法人税等調整額', key: 'tax', num: true }, { label: '税引後影響', key: 'after', num: true }], ye, { className: 'compact' }));
-      } else {
-        parts.push(barChart({ title: '年度別：連結損益への影響（税引前）', labels: ye.map((r) => r.label), series: [{ name: '損益影響', values: ye.map((r) => r.pre), color: COLORS.diff }], height: 200 }));
-      }
+      if (def.example === 'nci') parts.push(barChart({ title: '年度別：消去による損益影響（税引後）の帰属', labels: ye.map((r) => r.label), series: [{ name: '親会社株主', values: ye.map((r) => r.parent), color: COLORS.lessee }, { name: '非支配株主', values: ye.map((r) => r.nci), color: COLORS.lessor }], stacked: true, height: 220 }));
+      else if (def.example === 'tax') parts.push(table([{ label: '年度', key: 'label' }, { label: '税引前影響', key: 'pre', num: true }, { label: '法人税等調整額', key: 'tax', num: true }, { label: '税引後影響', key: 'after', num: true }], ye, { className: 'compact' }));
+      else parts.push(barChart({ title: '年度別：連結損益への影響（税引前）', labels: ye.map((r) => r.label), series: [{ name: '損益影響', values: ye.map((r) => r.pre), color: COLORS.diff }], height: 200 }));
     }
     if (def.example === 'depReclass') {
       const ws = worksheet(g, d.companies, pol, {}, per).filter((r) => r.type === 'PL' && r.consol !== 0);
@@ -74,15 +142,27 @@ function exampleFor(def, ctx) {
       const cf = cashFlowEliminations(g, pol, per);
       parts.push(table([{ label: '区分', key: 'section' }, { label: '項目', key: 'label' }, { label: '消去額', key: 'elim', num: true }], cf.items.filter((x) => x.elim), { className: 'compact' }));
     }
+    if (def.example === 'rate' || def.example === 'rounding') {
+      const sc = buildSchedule(d.contracts[0], pol);
+      const m12 = sc.months.slice(0, 12);
+      parts.push(table([{ label: '項目', key: 'a' }, { label: '金額', key: 'b', num: true }], [
+        { a: '当初リース負債', b: sc.meta.L0 },
+        { a: '1年目の支払利息', b: m12.reduce((a, x) => a + x.lessee.int, 0) },
+        { a: '1年目末のリース負債', b: m12[11].lessee.L_end },
+        { a: '利息総額', b: sc.meta.totalInterest },
+        { a: '最終回の端数調整額', b: sc.meta.finalResidual || 0 },
+      ], { className: 'compact' }));
+    }
     return h('div', { class: `ex-col${o.value === state.policies[def.id] ? ' current' : ''}` }, ...parts);
   });
-  return h('details', { class: 'example' }, h('summary', null, '設例で選択肢を比較する（仕訳例・グラフ）'), h('div', { class: 'ex-grid' }, cols));
+  return h('div', { class: 'ex-grid' }, cols);
 }
 
 function policyCard(def, ctx) {
   const cur = state.policies[def.id];
   const isDefault = cur === def.default;
   const name = `pol-${def.id}`;
+  const recLabel = def.matchExisting ? '既定値（自社方針に合わせて選択）' : '推奨（既定値）';
   const opts = h('fieldset', { class: 'options' }, h('legend', null, def.question),
     def.options.map((o) => h('label', { class: `opt${o.value === cur ? ' checked' : ''}` },
       h('input', { type: 'radio', name, value: o.value, checked: o.value === cur, on: { change: () => {
@@ -91,7 +171,7 @@ function policyCard(def, ctx) {
         toast(`${def.id} を「${o.label}」に変更しました。すべての仕訳・検算に反映されています`);
       } } }),
       h('div', { class: 'opt-body' },
-        h('div', { class: 'opt-label' }, o.label, o.value === def.default ? h('span', { class: 'rec' }, '推奨（既定値）') : null),
+        h('div', { class: 'opt-label' }, o.label, o.value === def.default ? h('span', { class: 'rec' }, recLabel) : null),
         o.summary ? h('div', { class: 'opt-sum' }, o.summary) : null,
         h('div', { class: 'proscons' },
           o.pros?.length ? h('ul', { class: 'pros' }, o.pros.map((p) => h('li', null, p))) : null,
@@ -103,9 +183,10 @@ function policyCard(def, ctx) {
       isDefault ? statusBadge('ok', '既定値を選択中') : statusBadge('warn', '既定値から変更')),
     h('p', { class: 'bg' }, def.background),
     opts,
+    def.options.length > 1 ? lazyDetails('example impact-box', `現在のデータでの影響を比較する（${ctx.period.label}・全契約）`, () => impactTable(def, ctx)) : null,
     h('div', { class: 'rationale' }, h('div', { class: 'sub-title' }, '既定値の根拠'), h('p', null, def.rationale),
       h('ul', { class: 'refs' }, def.references.map((r) => h('li', null, r.verified ? statusBadge('ok', '確認済') : statusBadge('warn', '要原文確認'), ' ', r.text)))),
-    exampleFor(def, ctx),
+    exampleFor(def),
     h('div', { class: 'note' }, h('div', { class: 'sub-title' }, '会計監査人との協議メモ（監査ログに記録）'), note,
       h('button', { class: 'btn', type: 'button', on: { click: () => update((d) => { d.notes[def.id] = note.value.slice(0, 4000); }, '協議メモ更新', def.id) } }, 'メモを保存')));
 }
@@ -113,7 +194,7 @@ function policyCard(def, ctx) {
 export function renderPolicies(ctx) {
   const pol = state.policies;
   const summary = table([
-    { label: 'No.', render: (d) => h('td', null, h('a', { href: `#/policies`, on: { click: (e) => { e.preventDefault(); document.getElementById(d.id)?.scrollIntoView({ behavior: 'smooth' }); } } }, d.id)) },
+    { label: 'No.', render: (d) => h('td', null, h('a', { href: '#/policies', on: { click: (e) => { e.preventDefault(); document.getElementById(d.id)?.scrollIntoView({ behavior: 'smooth' }); } } }, d.id)) },
     { label: '区分', key: 'category' },
     { label: '論点', key: 'title' },
     { label: '現在の選択', render: (d) => d.options.find((o) => o.value === pol[d.id])?.label },
@@ -123,8 +204,8 @@ export function renderPolicies(ctx) {
   return h('div', { class: 'page' },
     h('h1', null, '会計方針設定'),
     card(null,
-      h('p', null, '要件定義書 第11章の「監査法人等と協議すべき論点」について、基準・適用指針・実務対応報告や公表解説をもとに最も適切と考えられる処理を既定値にしています。選択を変えると、すべての仕訳・精算表・検算に直ちに反映されます。各論点の「設例で比較する」で、選択肢ごとの仕訳例とグラフを確認できます。'),
-      h('p', { class: 'help' }, '「要原文確認」の参照は、条番号等を基準の原文で確認する必要があるものです。最終的な方針は会計監査人と協議のうえ決定し、協議メモに記録してください（変更履歴は監査ログに残ります）。'),
+      h('p', null, '要件定義書 第11章の「監査法人等と協議すべき論点」について、基準・適用指針・実務対応報告や公表解説をもとに最も適切と考えられる処理を既定値にしています。選択を変えると、すべての仕訳・精算表・検算に直ちに反映されます。各論点では、現在のデータでの影響額の比較と、設例（仕訳例・グラフ）を確認できます。'),
+      h('p', { class: 'help' }, '「推奨（既定値）」は会計上の判断にもとづく推奨、「既定値（自社方針に合わせて選択）」は自社の既存方針・借手の計算方法に合わせて選ぶ論点の初期値です。「要原文確認」の参照は、条番号等を基準の原文で確認する必要があるものです。最終的な方針は会計監査人と協議のうえ決定し、協議メモに記録してください（変更履歴は監査ログに残ります）。'),
       summary,
       h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', on: { click: () => {
         if (!confirm('すべての会計方針を既定値に戻しますか？')) return;
