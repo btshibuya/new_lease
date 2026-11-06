@@ -119,7 +119,6 @@ function stepState(p, ctx) {
 function subItems(p, ctx) {
   const { data, checks, pol } = ctx;
   if (p.id === 'policies') return POLICIES.map((d) => ({ label: `${d.id} ${d.title}${pol[d.id] !== d.default ? '（変更）' : ''}`, go: () => flashTo(d.id) }));
-  if (p.id === 'contracts') return data.contracts.map((c) => ({ label: `${c.id} ${c.name}`, on: c.id === state.ui.contractId, go: () => { setUi({ contractId: c.id }); flashTo('contract-detail'); } }));
   if (p.id === 'checks') return checks.filter((c) => c.status !== 'ok').map((c) => ({ label: `${c.status === 'ng' ? '✕' : '!'} ${c.id} ${c.title.replace(/（.*$/, '')}`, go: () => flashTo(c.id) }));
   return [];
 }
@@ -146,13 +145,16 @@ function sidebar(page, ctx) {
     h('div', { class: 'nav-common' }, PAGES.filter((x) => x.common).map((p) => h('a', { href: `#${p.id}`, class: p.id === page.id ? 'on' : '' }, p.label))));
 }
 
+// 配色（ビジネストラストが既定）
+export const PALETTES = [['bt', 'ビジネストラスト'], ['blue', 'ブルー'], ['lightblue', 'ライトブルー'], ['green', 'グリーン'], ['red', 'レッド'], ['teal', 'ティール'], ['dark', 'ダーク']];
+
 function header() {
   return h('header', { class: 'app-header' },
     h('button', { class: 'btn btn-sm menu-btn', type: 'button', 'aria-controls': 'sidebar', on: { click: () => setUi({ menuOpen: !state.ui.menuOpen }) } }, '☰ メニュー'),
     h('a', { class: 'brand', href: '#dashboard' }, h('img', { src: 'bt-logo.png', alt: 'BUSINESS TRUST', class: 'brand-logo' }), h('span', { class: 'brand-name' }, 'グループ内リース連結仕訳')),
     h('div', { class: 'who' }, h('label', { for: 'palette' }, '配色'),
       h('select', { id: 'palette', on: { change: (e) => { document.documentElement.dataset.palette = e.target.value; setUi({ palette: e.target.value }); } } },
-        [['bt', 'ビジネストラスト'], ['light', '従来（ライト）'], ['dark', '従来（ダーク）']].map(([v2, l]) => h('option', { value: v2, selected: state.ui.palette === v2 }, l)))));
+        PALETTES.map(([v2, l]) => h('option', { value: v2, selected: state.ui.palette === v2 }, l)))));
 }
 
 function pageHead(page, ctx) {

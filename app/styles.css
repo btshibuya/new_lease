@@ -1,6 +1,6 @@
 /* アプリ固有のスタイル。
    土台は bt-style.css（ビジネストラストのデザイン：design/style.css の写し。値を変えるときは design/ 側を直してから写す）。
-   ここでは、土台にない部品（グラフ・仕訳カード・会計方針カード等）を土台の色の変数で書き、配色の切替え（従来のライト・ダーク）を定義する。 */
+   ここでは、土台にない部品（グラフ・仕訳カード・会計方針カード等）を土台の色の変数で書き、配色の切替え（ブルー・ライトブルー・グリーン・レッド・ティール・ダーク）を定義する。 */
 
 :root {
   /* グラフの系列色（ロゴの4色と紺、その淡い色） */
@@ -18,6 +18,7 @@
   --grid: #e8edf5;
   --muted: var(--note);
   --hl-band: rgba(0, 168, 234, 0.10);
+  --cyan-line: #a7dcf3;
   --good: var(--green);
   --warn: #f3d38a;
   --crit: var(--red);
@@ -27,22 +28,36 @@
   color-scheme: light;
 }
 
-/* ── 配色の切替え：従来（ライト） ── */
-html[data-palette="light"] {
-  --navy: #0b0b0b; --navy-2: #2a78d6; --navy-hover: #1f5fae; --corporate: #2a78d6; --cyan: #1baf7a; --cyan-soft: #e8f1fc;
-  --soft: #f5f5f2; --soft-2: #f0efec; --line: #dddcd6; --line-2: #e6e5e0; --text: #0b0b0b; --sub: #52514e; --note: #74736d;
-  --red: #d03b3b; --red-dark: #a42020; --green: #0c802c; --bg: #f5f5f2; --surface: #fcfcfb;
-  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+/* ── 配色の切替え：ブルー・ライトブルー・グリーン・レッド・ティール ──
+   --navy：見出しの文字・濃い色、--navy-2：主ボタン、--corporate：基調色、--cyan：選択中・強調、--cyan-soft：選択中の背景 */
+html[data-palette="blue"] {
+  --navy: #1b3a6b; --navy-2: #2b579a; --navy-hover: #1e4380; --corporate: #2b579a; --cyan: #41a5ee; --cyan-soft: #e9f2fc; --cyan-line: #b9d7f5;
+  --s1: #2b579a; --s2: #41a5ee; --s3: #00754e; --s4: #1b3a6b; --s5: #7f9fd0; --s6: #9ccbf3; --s7: #4fa585; --s8: #8a96ad;
 }
-html[data-palette="light"] :root, html[data-palette="light"] body { font-family: system-ui, -apple-system, "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif; }
+html[data-palette="lightblue"] {
+  --navy: #004578; --navy-2: #0078d4; --navy-hover: #005a9e; --corporate: #0078d4; --cyan: #28a8ea; --cyan-soft: #e8f4fd; --cyan-line: #a9d8f6;
+  --s1: #0078d4; --s2: #28a8ea; --s3: #00754e; --s4: #004578; --s5: #6cb2ea; --s6: #a6dcf7; --s7: #4fa585; --s8: #8a96ad;
+}
+html[data-palette="green"] {
+  --navy: #0e4429; --navy-2: #217346; --navy-hover: #185c37; --corporate: #217346; --cyan: #33c481; --cyan-soft: #e9f6ee; --cyan-line: #a8dcbf;
+  --s1: #217346; --s2: #33c481; --s3: #2b579a; --s4: #0e4429; --s5: #7fb894; --s6: #9fe0c0; --s7: #5b86d6; --s8: #8a96ad;
+}
+html[data-palette="red"] {
+  --navy: #7a2a12; --navy-2: #b7472a; --navy-hover: #963a21; --corporate: #c43e1c; --cyan: #ed6c47; --cyan-soft: #fdf0eb; --cyan-line: #f4c2b2;
+  --s1: #c43e1c; --s2: #ed6c47; --s3: #00754e; --s4: #7a2a12; --s5: #e09a85; --s6: #f6b9a5; --s7: #4fa585; --s8: #8a96ad;
+}
+html[data-palette="teal"] {
+  --navy: #04443d; --navy-2: #077568; --navy-hover: #055a50; --corporate: #077568; --cyan: #2bb3a3; --cyan-soft: #e7f5f3; --cyan-line: #a4dcd5;
+  --s1: #077568; --s2: #2bb3a3; --s3: #2b579a; --s4: #04443d; --s5: #73b7ae; --s6: #9fded6; --s7: #5b86d6; --s8: #8a96ad;
+}
 
-/* ── 配色の切替え：従来（ダーク） ── */
+/* ── 配色の切替え：ダーク ── */
 html[data-palette="dark"] {
   color-scheme: dark;
   --navy: #e8ecf5; --navy-2: #8fb0f0; --navy-hover: #6f95e0; --corporate: #5b86d6; --cyan: #3fc1f2; --cyan-soft: #16324a;
   --soft: #1e2430; --soft-2: #232a38; --line: #3a4150; --line-2: #323946; --text: #e8eaf0; --sub: #b9bfcc; --note: #959cab;
   --red: #ff7b7b; --red-dark: #ff9a9a; --green: #5fd39a; --bg: #121519; --surface: #1a1e25;
-  --hl: #4a3f12; --hl-strong: #6b5814; --hl-line: #e0a040; --grid: #2c3240; --caution-bg: #3a2f12; --caution-text: #f3d38a;
+  --cyan-line: #2c5a7a; --hl: #4a3f12; --hl-strong: #6b5814; --hl-line: #e0a040; --grid: #2c3240; --caution-bg: #3a2f12; --caution-text: #f3d38a;
   --s5: #9db6e8; --s6: #8fdcf8; --s7: #7fc7a6; --s8: #a5afc3;
 }
 html[data-palette="dark"] .app-header, html[data-palette="dark"] .sidebar, html[data-palette="dark"] .panel,
@@ -77,9 +92,9 @@ textarea { width: 100%; }
 .app-header { padding-left: max(18px, env(safe-area-inset-left, 0px)); padding-right: max(18px, env(safe-area-inset-right, 0px)); }
 .app-header .who select { padding: 3px 6px; }
 .menu-btn { display: none; }
-.nav-top { display: block; padding: 8px 10px; margin-bottom: 6px; border-radius: 6px; color: var(--text); font-weight: 700; border-left: 3px solid transparent; }
+.nav-top { display: block; padding: 8px 10px; margin-bottom: 6px; border-radius: 6px; color: var(--text); font-weight: 700; }
 .nav-top:hover { background: var(--soft); text-decoration: none; }
-.nav-top.on { background: var(--cyan-soft); border-left-color: var(--cyan); color: var(--navy); }
+.nav-top.on { background: var(--cyan-soft); color: var(--navy); box-shadow: inset 0 0 0 1px var(--cyan-line); }
 .nav-caption { margin: 8px 8px 2px; }
 .nav-sub a { line-height: 1.35; }
 .nav-sub a.on { color: var(--navy); font-weight: 700; background: var(--cyan-soft); }
@@ -96,33 +111,53 @@ main > .page-head + * { margin-top: 4px; }
 .badge.caution { background: var(--caution-bg); color: var(--caution-text); }
 .check-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .check-head h2 { margin: 0; }
-.check { border-left: 4px solid var(--line); }
-.st-border-ok { border-left-color: var(--green); }
-.st-border-warn { border-left-color: #e0a040; }
-.st-border-ng { border-left-color: var(--red); }
+.check.st-border-ng { border-color: #f0b8b8; }
+.check.st-border-warn { border-color: #f1d9a6; }
 
 /* ── 数値の見出し（.kpi .k の補足） ── */
 .kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
-.kpi .k { min-width: 0; border-left: 4px solid var(--line-2); }
+.kpi .k { min-width: 0; border: 1px solid var(--line-2); border-radius: 10px; padding: 10px 14px; box-shadow: 0 1px 2px rgba(20, 37, 74, .06); }
 .kpi .k > span:first-child { display: block; }
-.kpi .k.accent-lessee { border-left-color: var(--s1); }
-.kpi .k.accent-diff { border-left-color: var(--s3); }
-.kpi .k.accent-good { border-left-color: var(--green); }
-.kpi .k.accent-warn { border-left-color: #e0a040; }
-.kpi .k.accent-crit { border-left-color: var(--red); }
+.kpi .k.accent-good b { color: var(--green); }
+.kpi .k.accent-warn b { color: #9a6200; }
+.kpi .k.accent-crit b { color: var(--red); }
 .kpi .k b.v { display: inline-block; }
 .k-sub { display: block; color: var(--note); font-size: 11px; margin-top: 2px; }
+
+/* ── ボタン：細い枠＋淡い影で背景との境を示す。押したときは沈む。左のラインは使わない ── */
+.btn { border-color: var(--line); border-radius: 7px; box-shadow: 0 1px 2px rgba(20, 37, 74, .08); font-weight: 500; transition: background .12s, border-color .12s, box-shadow .12s, transform .05s; }
+.btn:hover:not(:disabled) { background: var(--cyan-soft); border-color: var(--corporate); color: var(--navy); }
+.btn:active:not(:disabled) { transform: translateY(1px); box-shadow: none; }
+.btn:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.btn-primary { box-shadow: 0 1px 3px rgba(20, 37, 74, .25); }
+.btn-primary:hover:not(:disabled) { color: #fff; border-color: var(--navy-hover); }
+.btn-danger:hover:not(:disabled) { background: #fdf0f0; border-color: var(--red); color: var(--red); }
+.nav-head { border-left: 0 !important; }
+.nav-step.on > .nav-head { box-shadow: inset 0 0 0 1px var(--cyan-line); }
+.steps li.yes, .steps li.no { border-left-width: 1px; }
 
 /* ── 表・ボタンの補足 ── */
 .tbl-wrap { max-width: 100%; }
 .scroll-y { max-height: 420px; overflow-y: auto; }
+.list-box { max-height: 360px; border: 1px solid var(--line-2); border-radius: 8px; }
+.list-box .tbl { margin: 0; }
+.list-box thead th { position: sticky; top: 0; z-index: 1; }
+.list-filter { width: 260px; max-width: 100%; }
+.err-list { max-height: 300px; overflow-y: auto; margin: 6px 0; padding-left: 20px; color: var(--red); font-size: 12.5px; }
+.err-list li { margin: 3px 0; }
+.modal.ask { max-width: min(680px, calc(100vw - 32px)); }
 .tbl.compact th, .tbl.compact td { padding: 3px 6px; font-size: 12px; }
 .tbl td.num.strong { font-weight: 700; }
 .tbl tr.selected td { background: var(--cyan-soft); }
 .tbl input { min-width: 80px; }
 .tbl th.nw, .tbl td.nw { white-space: nowrap; }
-.tbl.ws-table { min-width: 760px; }
-.tbl.ws-table td:first-child { min-width: 220px; }
+/* 連結精算表・CF・注記の表は、科目名の列と金額の列の幅をすべての表でそろえる */
+.tbl.ws-table { width: auto; }
+.tbl.ws-table th, .tbl.ws-table td { width: 104px; min-width: 104px; max-width: 104px; }
+.tbl.ws-table th:first-child, .tbl.ws-table td:first-child { width: 260px; min-width: 260px; max-width: 260px; }
+.tbl.ws-notes th:last-child, .tbl.ws-notes td:last-child { width: auto; min-width: 280px; max-width: 460px; }
+.tbl.ws-table td.indent { padding-left: 26px; }
+.tbl tr.sub td { color: var(--sub); }
 input[type=number] { text-align: right; font-variant-numeric: tabular-nums; }
 .co { display: inline-block; margin-left: 6px; font-size: 10.5px; color: var(--sub); background: var(--soft-2); border-radius: 4px; padding: 0 5px; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; align-items: center; }
@@ -160,7 +195,10 @@ legend { font-weight: 700; color: var(--navy); padding: 0 6px; }
 .co-badge { font-size: 10px; padding: 0 4px; margin-right: 4px; }
 
 /* ── 仕訳カード ── */
-.journals { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(520px, 100%), 1fr)); gap: 12px; }
+.journals { display: grid; grid-template-columns: 1fr; gap: 12px; max-width: 1100px; }
+/* 仕訳カードの表は列幅をそろえる（科目は広く、金額は同じ幅） */
+.tbl.journal { table-layout: fixed; width: 100%; }
+.tbl.journal th:nth-child(2), .tbl.journal th:nth-child(4) { width: 140px; }
 .journal-card { background: var(--surface); border: 1px solid var(--line-2); border-radius: 8px; padding: 12px; min-width: 0; }
 .journal-card header { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin-bottom: 8px; }
 .tpl { font-size: 11px; font-weight: 700; border-radius: 10px; padding: 1px 8px; background: var(--soft-2); color: var(--navy-2); white-space: nowrap; }
@@ -190,7 +228,7 @@ legend { font-weight: 700; color: var(--navy); padding: 0 6px; }
 .options { display: grid; gap: 8px; border: 0; padding: 0; background: none; }
 .options legend { font-size: 14px; margin-bottom: 4px; padding: 0; }
 .opt { display: flex; gap: 10px; border: 1px solid var(--line-2); border-radius: 8px; padding: 10px 12px; cursor: pointer; background: var(--surface); }
-.opt.checked { border-color: var(--cyan); background: var(--cyan-soft); box-shadow: inset 3px 0 0 var(--cyan); }
+.opt.checked { border-color: var(--cyan); background: var(--cyan-soft); box-shadow: 0 0 0 1px var(--cyan); }
 .opt input { margin-top: 4px; accent-color: var(--navy-2); }
 .opt-label { font-weight: 700; color: var(--navy); }
 .rec { margin-left: 8px; font-size: 11px; font-weight: 400; color: var(--green); background: #e3f3e8; border-radius: 10px; padding: 1px 7px; }
@@ -207,7 +245,7 @@ legend { font-weight: 700; color: var(--navy); padding: 0 6px; }
 .example > summary { cursor: pointer; color: var(--navy-2); font-weight: 700; }
 .ex-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr)); gap: 12px; margin-top: 10px; }
 .ex-col { border: 1px solid var(--line-2); border-radius: 8px; padding: 10px; min-width: 0; background: var(--surface); }
-.ex-col.current { border-color: var(--cyan); box-shadow: inset 3px 0 0 var(--cyan); }
+.ex-col.current { border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan); }
 .ex-col > * + * { margin-top: 8px; }
 .ex-head { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
 .ex-opt { font-weight: 700; color: var(--navy); }
@@ -248,12 +286,14 @@ legend { font-weight: 700; color: var(--navy); padding: 0 6px; }
 td.hl, .hl:not(rect) { fill: initial; }
 .mark { fill: var(--red); font-size: 14px; font-weight: 700; }
 .row-label { fill: var(--text); font-size: 12px; }
-.edge { fill: none; stroke: var(--cyan); opacity: 0.9; }
+.edge { fill: none; stroke: var(--cyan); opacity: 0.95; stroke-linecap: round; }
+.own-line { fill: none; stroke: var(--note); stroke-width: 1.4; }
+.own-label { fill: var(--sub); font-size: 11px; font-weight: 700; }
 .edge-hit { fill: none; stroke: transparent; stroke-width: 16; cursor: pointer; }
 .edge-label { fill: var(--text); font-size: 11px; paint-order: stroke; stroke: var(--surface); stroke-width: 4px; }
 .arrowhead { fill: var(--cyan); }
-.node { fill: var(--surface); stroke: var(--corporate); stroke-width: 2; }
-.node.parent { stroke: var(--navy); stroke-width: 3; }
+.node { fill: var(--surface); stroke: var(--corporate); stroke-width: 1.4; }
+.node.parent { stroke: var(--navy); stroke-width: 2; fill: var(--cyan-soft); }
 .node-label { fill: var(--navy); font-size: 13px; font-weight: 700; }
 .node-sub { fill: var(--sub); font-size: 10px; }
 .tip { position: absolute; z-index: 5; pointer-events: none; background: var(--tip-bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font-size: 12px; box-shadow: 0 4px 12px rgba(20, 37, 74, 0.15); min-width: 140px; max-width: 360px; }

@@ -35,7 +35,8 @@ export function renderDashboard(ctx) {
 
   // 相関図
   const involved = new Set(data.contracts.flatMap((c) => [c.lessorCo, c.lesseeCo]));
-  const nodes = companies.filter((c) => involved.has(c.code)).map((c) => ({ id: c.code, label: `${c.code} ${c.name.replace(/[（(].*$/, '')}`.slice(0, 12), sub: `${c.isParent ? '親会社' : `非支配 ${(c.nciRatio * 100).toFixed(0)}%`}・${c.fyeMonth}月決算`, parent: c.isParent }));
+  // 出資関係図の配置：親会社は常に表示し、グループ内リースのある子会社を下に並べる
+  const nodes = companies.filter((c) => c.isParent || involved.has(c.code)).map((c) => ({ id: c.code, label: `${c.code} ${c.name.replace(/[（(].*$/, '')}`.slice(0, 12), sub: `${c.isParent ? '親会社' : `親会社持分 ${+((1 - c.nciRatio) * 100).toFixed(1)}%`}・${c.fyeMonth}月決算`, parent: c.isParent, own: c.isParent ? undefined : 1 - c.nciRatio }));
   const pairs = new Map();
   for (const r of res) {
     const k = `${r.contract.lessorCo}>${r.contract.lesseeCo}`;
@@ -45,7 +46,7 @@ export function renderDashboard(ctx) {
     pairs.set(k, p);
   }
   const edges = [...pairs.values()].map((p) => ({ from: p.from, to: p.to, label: `${p.n}件／負債 ${fmt(p.L)}`, detail: p.detail, weight: p.inc || 1 }));
-  const net = network({ title: 'グループ内リース相関図（矢印：貸手→借手、太さ：当期の受取リース料）', subtitle: `${period.label}末時点。線にカーソルを合わせると契約明細を表示`, nodes, edges });
+  const net = network({ title: 'グループ内リースの関係図（出資関係とリース）', subtitle: `${period.label}末時点。線にカーソルを合わせると契約明細を表示`, nodes, edges });
 
   // 年度別推移（全契約合算）：スケジュールから直接集計（契約番号で突き合わせ、計算エラーの契約は除外）
   const scheds = [...ctx.schedCache.entries()];

@@ -224,3 +224,77 @@ export function contractYearly(sched, periods, currentPortionFn) {
   }
   return rows;
 }
+
+/**
+ * 注記（新リース会計基準）に含まれるグループ内リースの金額。
+ * 各社の個別の注記にはグループ内リースが含まれるが、連結の注記では除く（グループ内リースは連結上存在しない）。
+ * ここでは「各社の注記に含まれるグループ内リース分」を契約別に求める。連結注記の調整額はその符号を反対にした額。
+ * 根拠の status：confirmed＝公表資料で確認済み、check＝項番号・要否を基準の原文で確認する必要があるもの。
+ * @returns {{ items: object[], maturity: object[] }}
+ */
+export function disclosures(gen, period, pol) {
+  const R = (v) => round(v, pol['POL-11'] || 'half_up');
+  const CLS = { building: '建物', machine: '機械装置', vehicle: '車両運搬具', tool: '工具器具備品', land: '土地', other: 'その他' };
+  const items = [];
+  const item = (o) => { const it = { ...o, rows: [] }; items.push(it); return it; };
+  const L = {
+    nbv: item({ id: 'N-L1', side: '借手', title: '使用権資産の帳簿価額（原資産の表示科目ごと）', when: '期末', byClass: true, basis: '使用権資産を区分表示しない場合は、含まれる科目と金額を注記。区分表示する場合も、原資産を自ら所有していたと仮定した表示科目ごとの内訳が求められる', status: 'check' }),
+    add: item({ id: 'N-L2', side: '借手', title: '使用権資産の増加額', when: '当期', basis: '当期及び翌期以降のリースの金額を理解するための情報。適用初年度の経過措置で計上した額は含めない', status: 'check' }),
+    dep: item({ id: 'N-L3', side: '借手', title: '使用権資産の減価償却費（原資産の表示科目ごと）', when: '当期', byClass: true, basis: '借手のリース活動の性質を理解するための情報として、使用権資産の減価償却費の注記が求められる', status: 'confirmed' }),
+    int: item({ id: 'N-L4', side: '借手', title: 'リース負債に係る利息費用', when: '当期', basis: 'リースが経営成績に与える影響を理解するための情報（要否は原文で確認）', status: 'check' }),
+    short: item({ id: 'N-L5', side: '借手', title: '短期リース・少額リース等に係る費用', when: '当期', basis: '使用権資産・リース負債を計上しない簡便的な取扱いを適用したリースの費用', status: 'check' }),
+    cash: item({ id: 'N-L6', side: '借手', title: 'リースに係るキャッシュ・アウトフローの合計額', when: '当期', basis: '短期・少額リース等や解約違約金を含む、借手の支払額の合計', status: 'check' }),
+  };
+  const Rr = {
+    inc: item({ id: 'N-R1', side: '貸手', title: 'オペレーティング・リースによる収益', when: '当期', basis: 'リースが貸手の経営成績に与える影響を理解するための情報', status: 'check' }),
+    re: item({ id: 'N-R2', side: '貸手', title: '賃貸等不動産の期末簿価（グループ会社への賃貸分）', when: '期末', basis: '連結上は自己使用の資産となるため、連結の賃貸等不動産の注記から除く（企業会計基準第20号・適用指針第23号）', status: 'check' }),
+    reInc: item({ id: 'N-R3', side: '貸手', title: '賃貸等不動産の賃貸損益（グループ会社への賃貸分）', when: '当期', basis: '賃貸収益−減価償却費。連結の賃貸等不動産の注記から除く', status: 'check' }),
+  };
+  const buckets = [
+    { label: '1年以内', from: 1, to: 12 }, { label: '1年超2年以内', from: 13, to: 24 }, { label: '2年超3年以内', from: 25, to: 36 },
+    { label: '3年超4年以内', from: 37, to: 48 }, { label: '4年超5年以内', from: 49, to: 60 }, { label: '5年超', from: 61, to: 1e9 },
+  ];
+  const recv = buckets.map((b) => ({ ...b, amount: 0, rows: [] }));
+  for (const r of gen.results) {
+    const { contract: c, ps, sched } = r;
+    const model = sched.meta.model;
+    const cls = CLS[c.assetClass] || 'その他';
+    const push = (it, co, amt, note = '') => { if (amt) it.rows.push({ contract: c.id, name: c.name, co, cls, amt, note }); };
+    const endRec = sched.byIndex(period.end);
+    const alive = endRec && !endRec.lessee.term;
+    const inP = sched.months.filter((x) => x.m >= period.start && x.m <= period.end);
+    if (model !== 'offbalance') {
+      if (alive) push(L.nbv, c.lesseeCo, ps.close.cost - ps.close.acc);
+      const cm = ps.commence && sched.meta.measSource === 'none' ? (model === 'asc842ol' ? ps.commence.L0 : ps.commence.C0) : 0;
+      const rm = inP.reduce((a, x) => a + (x.lessee.remeasure ? Math.max(0, x.lessee.remeasure.dL) : 0), 0);
+      push(L.add, c.lesseeCo, cm + rm, rm ? `条件変更による増加 ${rm} を含む` : '');
+      push(L.dep, c.lesseeCo, ps.dep);
+      push(L.int, c.lesseeCo, ps.int + (model === 'asc842ol' ? 0 : ps.accr || 0));
+    } else push(L.short, c.lesseeCo, ps.cost);
+    const pen = inP.reduce((a, x) => a + (x.lessee.penalty || 0), 0);
+    push(L.cash, c.lesseeCo, inP.reduce((a, x) => a + (x.lessor.cash || 0), 0) + pen, pen ? `解約違約金 ${pen} を含む` : '');
+    push(Rr.inc, c.lessorCo, ps.inc);
+    const lr = c.lessor || {};
+    if (lr.assetCost > 0 && ['building', 'land'].includes(c.assetClass)) {
+      const ratio = lr.ratio ?? 1;
+      if (alive) push(Rr.re, c.lessorCo, R(lr.assetCost * ratio) - R((endRec.lessor.assetAcc_end || 0) * ratio));
+      const dep = R(inP.filter((x) => x.m >= sched.meta.start).reduce((a, x) => a + (x.lessor.assetDep || 0), 0) * ratio);
+      push(Rr.reInc, c.lessorCo, ps.inc - dep, `賃貸収益 ${ps.inc} − 減価償却費 ${dep}`);
+    }
+    // 貸手：将来の受取リース料（決算日後、1年ごと5年以内＋5年超）
+    if (alive) {
+      for (const x of sched.months) {
+        if (x.m <= period.end || !x.lessor.cash) continue;
+        const b = recv.find((y) => x.m - period.end >= y.from && x.m - period.end <= y.to);
+        if (b) { b.amount += x.lessor.cash; const row = b.rows.find((z) => z.contract === c.id); if (row) row.amt += x.lessor.cash; else b.rows.push({ contract: c.id, name: c.name, co: c.lessorCo, amt: x.lessor.cash }); }
+      }
+    }
+  }
+  for (const it of items) it.amount = it.rows.reduce((a, x) => a + x.amt, 0);
+  // 借手：リース負債の満期分析（割引前）と元本の返済予定額
+  const lm = maturity(gen, period);
+  return {
+    items,
+    maturity: buckets.map((b, i) => ({ label: b.label, lesseeAmount: lm[i].amount, lesseePrincipal: lm[i].principal, lessorReceipts: recv[i].amount, lessorRows: recv[i].rows })),
+  };
+}

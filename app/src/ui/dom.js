@@ -119,7 +119,7 @@ export function select(options, value, onChange) {
  * 画面内の確認ダイアログ（ブラウザの confirm/prompt が使えない環境でも動作する）。
  * @returns {Promise<true|string|null>} 実行＝true（入力ありの場合は入力文字列）、キャンセル＝null
  */
-export function ask({ title, message = '', okLabel = '実行する', danger = false, input = null }) {
+export function ask({ title, message = '', okLabel = '実行する', danger = false, input = null, body = null }) {
   return new Promise((resolve) => {
     const prev = document.activeElement;
     const ta = input ? h('textarea', { id: 'ask-input', rows: 3, maxlength: 300, placeholder: input, 'aria-label': input }) : null;
@@ -132,7 +132,7 @@ export function ask({ title, message = '', okLabel = '実行する', danger = fa
     } } }, okLabel);
     const cancel = h('button', { class: 'btn', type: 'button', on: { click: () => close(null) } }, 'キャンセル');
     const box = h('div', { class: 'modal ask', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'ask-title' },
-      h('div', { class: 'modal-head' }, h('b', { id: 'ask-title' }, title)), message ? h('p', { class: 'ask-msg' }, message) : null, ta, err, h('div', { class: 'row ask-actions' }, h('span', { class: 'spacer' }), cancel, ok));
+      h('div', { class: 'modal-head' }, h('b', { id: 'ask-title' }, title)), message ? h('p', { class: 'ask-msg' }, message) : null, body, ta, err, h('div', { class: 'row ask-actions' }, h('span', { class: 'spacer' }), cancel, ok));
     overlay = h('div', { class: 'modal-bg', on: { keydown: (e) => { if (e.key === 'Escape') close(null); }, click: (e) => { if (e.target === overlay) close(null); } } }, box);
     document.body.appendChild(overlay);
     (ta || ok).focus();

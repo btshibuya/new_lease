@@ -251,52 +251,82 @@ export function waterfall(opts) {
  * グループ内リース相関図
  * opts: { title, nodes:[{id,label,sub}], edges:[{from,to,label,detail,weight}] }
  */
+/**
+ * グループ内リースの関係図（出資関係図の配置）
+ * 親会社を上段、子会社を下段に並べ、灰色の線で出資関係（親会社持分）を、水色の矢印で貸手→借手のリースを表す。
+ * opts: { title, subtitle, nodes:[{id,label,sub,parent,own}], edges:[{from,to,label,detail,weight}] }
+ */
 export function network(opts) {
-  const W = opts.wide ? WIDE_W : BASE_W;
-  const H = opts.height || 360;
-  const cx = W / 2, cy = H / 2;
-  const R = Math.min(W, H) / 2 - 70;
-  const n = opts.nodes.length;
+  const parent = opts.nodes.find((n) => n.parent) || opts.nodes[0];
+  const subs = opts.nodes.filter((n) => n !== parent);
+  // 子会社の数に応じて座標幅を決める（半分幅のカードでも文字が小さくなりすぎないように）
+  const W = Math.max(560, 40 + subs.length * 176);
+  const bw = Math.min(160, subs.length ? (W - 40) / subs.length - 16 : 160), bh = 48;
+  const subY = 228;
+  const sameRow = opts.edges.some((e) => subs.some((n) => n.id === e.from) && subs.some((n) => n.id === e.to));
+  const H = opts.height || subY + bh / 2 + (sameRow ? 84 : 16);
   const pos = {};
-  opts.nodes.forEach((nd, i) => {
-    const a = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(n, 1);
-    pos[nd.id] = { x: cx + R * Math.cos(a) * 1.25, y: cy + R * Math.sin(a) };
-  });
+  if (parent) pos[parent.id] = { x: W / 2, y: 40, w: 180 };
+  subs.forEach((n, i) => { pos[n.id] = { x: 20 + ((i + 0.5) * (W - 40)) / subs.length, y: subY, w: bw }; });
   const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, class: 'svg', role: 'img', 'aria-label': opts.title });
-  const defs = s('defs', null, s('marker', { id: 'arrow', viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' }, s('path', { d: 'M0,0 L10,5 L0,10 z', class: 'arrowhead' })));
-  svg.append(defs);
+  // 矢じりは線の太さに比例させない（userSpaceOnUse）
+  svg.append(s('defs', null, s('marker', { id: 'arrow', viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 8, markerHeight: 8, markerUnits: 'userSpaceOnUse', orient: 'auto-start-reverse' }, s('path', { d: 'M0,0 L10,5 L0,10 z', class: 'arrowhead' }))));
+  const label = (n) => opts.nodes.find((x) => x.id === n)?.label;
+  const f = frame({ ...opts, legend: [{ name: '出資関係（親会社持分）', color: 'var(--note)', kind: 'line' }, { name: 'リース（貸手→借手、太さ：当期の受取リース料）', color: 'var(--cyan)', kind: 'line' }] }, svg,
+    table([{ label: '貸手', key: 'from' }, { label: '借手', key: 'to' }, { label: '内容', key: 'label' }], opts.edges.map((e) => ({ ...e, from: label(e.from), to: label(e.to) }))));
+
+  // 出資関係：親会社の下から横線へ、横線から各子会社へ（直角の線）
+  if (parent && subs.length) {
+    const P = pos[parent.id];
+    const busY = P.y + bh / 2 + 44;
+    const xs = subs.map((n) => pos[n.id].x);
+    svg.append(s('path', { class: 'own-line', d: `M${P.x},${P.y + bh / 2} V${busY} M${Math.min(...xs, P.x)},${busY} H${Math.max(...xs, P.x)}` }));
+    for (const n of subs) {
+      const q = pos[n.id];
+      svg.append(s('path', { class: 'own-line', d: `M${q.x},${busY} V${q.y - bh / 2}` }));
+      if (n.own !== undefined) svg.append(s('text', { x: q.x - 6, y: busY + 18, class: 'own-label', 'text-anchor': 'end' }, `${Math.round(n.own * 1000) / 10}%`));
+    }
+  }
+
+  // リースの矢印：細い線。往復（P→S と S→P）は左右の別の位置を通し、ラベルの位置もずらす
   const maxW = Math.max(1, ...opts.edges.map((e) => e.weight || 1));
-  const f = frame({ ...opts, legend: [] }, svg, table([{ label: '貸手', key: 'from' }, { label: '借手', key: 'to' }, { label: '内容', key: 'label' }], opts.edges.map((e) => ({ ...e, from: opts.nodes.find((x) => x.id === e.from)?.label, to: opts.nodes.find((x) => x.id === e.to)?.label }))));
-  const pairCount = {};
   for (const e of opts.edges) {
     const a = pos[e.from], b = pos[e.to];
     if (!a || !b) continue;
-    const key = [e.from, e.to].sort().join('|');
-    const idx = (pairCount[key] = (pairCount[key] || 0) + 1);
-    const dx = b.x - a.x, dy = b.y - a.y;
-    const len = Math.hypot(dx, dy) || 1;
-    const nx = -dy / len, ny = dx / len;
-    // 法線は向きで反転するため、往復の線は自然に左右へ分かれる
-    const bend = 28 + (idx - 1) * 22;
-    const sx = a.x + (dx / len) * 46, sy = a.y + (dy / len) * 46;
-    const ex = b.x - (dx / len) * 50, ey = b.y - (dy / len) * 50;
-    const mx = (sx + ex) / 2 + nx * bend, my = (sy + ey) / 2 + ny * bend;
-    const wdt = 1.5 + 4 * ((e.weight || 1) / maxW);
-    const path = s('path', { d: `M${sx},${sy} Q${mx},${my} ${ex},${ey}`, class: 'edge', 'stroke-width': wdt, 'marker-end': 'url(#arrow)' });
-    svg.append(path);
-    const lx = (sx + 2 * mx + ex) / 4, ly = (sy + 2 * my + ey) / 4;
-    const t = s('text', { x: lx, y: ly, class: 'edge-label', 'text-anchor': 'middle' }, e.label);
-    svg.append(t);
-    const hit = s('path', { d: `M${sx},${sy} Q${mx},${my} ${ex},${ey}`, class: 'edge-hit' });
-    hit.addEventListener('mousemove', (ev) => showTip(f, ev, [{ text: `${opts.nodes.find((x) => x.id === e.from)?.label} → ${opts.nodes.find((x) => x.id === e.to)?.label}` }, ...(e.detail || []).map((d) => ({ text: d }))]));
+    const wdt = 1.2 + 1.6 * ((e.weight || 1) / maxW);
+    let d, lx, ly;
+    if (Math.abs(a.y - b.y) < 1) {
+      // 子会社どうし：箱の下を通る弧
+      const sx = a.x + (b.x > a.x ? 10 : -10), ex = b.x + (b.x > a.x ? -10 : 10);
+      const y0 = a.y + bh / 2, cy = y0 + 46 + (a.x > b.x ? 22 : 0);
+      d = `M${sx},${y0} Q${(sx + ex) / 2},${cy} ${ex},${y0}`;
+      lx = (sx + ex) / 2; ly = (y0 + cy) / 2 + 12;
+    } else {
+      const down = a.y < b.y; // 上から下（親会社→子会社）
+      const top = down ? a : b, bot = down ? b : a;
+      const lane = down ? 1 : -1; // 下向きは右側、上向きは左側の位置を通す
+      const tx = top.x + Math.max(-60, Math.min(60, (bot.x - top.x) * 0.35)) + lane * 16;
+      const bx = bot.x + lane * (bot.w / 2 - 22);
+      const ty = top.y + bh / 2, by = bot.y - bh / 2;
+      const [sx, sy, ex, ey] = down ? [tx, ty, bx, by] : [bx, by, tx, ty];
+      const cx = (sx + ex) / 2 + lane * 26, cy = (sy + ey) / 2;
+      d = `M${sx},${sy} Q${cx},${cy} ${ex},${ey}`;
+      const t = down ? 0.62 : 0.38; // 往復のラベルが重ならないよう、線上の位置を変える
+      lx = (1 - t) * (1 - t) * sx + 2 * t * (1 - t) * cx + t * t * ex + lane * 6;
+      ly = (1 - t) * (1 - t) * sy + 2 * t * (1 - t) * cy + t * t * ey;
+    }
+    svg.append(s('path', { d, class: 'edge', 'stroke-width': wdt, 'marker-end': 'url(#arrow)' }));
+    svg.append(s('text', { x: lx, y: ly, class: 'edge-label', 'text-anchor': lx >= (a.x + b.x) / 2 ? 'start' : 'end' }, e.label));
+    const hit = s('path', { d, class: 'edge-hit' });
+    hit.addEventListener('mousemove', (ev) => showTip(f, ev, [{ text: `${label(e.from)} → ${label(e.to)}` }, ...(e.detail || []).map((x) => ({ text: x }))]));
     hit.addEventListener('mouseleave', () => hideTip(f));
     svg.append(hit);
   }
   for (const nd of opts.nodes) {
     const p = pos[nd.id];
-    svg.append(s('rect', { x: p.x - 80, y: p.y - 26, width: 160, height: 52, rx: 10, class: `node${nd.parent ? ' parent' : ''}` }));
+    svg.append(s('rect', { x: p.x - p.w / 2, y: p.y - bh / 2, width: p.w, height: bh, rx: 8, class: `node${nd.parent ? ' parent' : ''}` }));
     svg.append(s('text', { x: p.x, y: p.y - 3, class: 'node-label', 'text-anchor': 'middle' }, nd.label));
-    if (nd.sub) svg.append(s('text', { x: p.x, y: p.y + 15, class: 'node-sub', 'text-anchor': 'middle' }, nd.sub));
+    if (nd.sub) svg.append(s('text', { x: p.x, y: p.y + 14, class: 'node-sub', 'text-anchor': 'middle' }, nd.sub));
   }
   return f;
 }

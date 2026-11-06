@@ -1,14 +1,16 @@
-import { h, card, table, field, select, statusBadge, toast, amt, ask } from '../dom.js';
+import { h, card, table, field, select, statusBadge, toast, amt, ask, download } from '../dom.js';
 import { COLORS, emptyState, kpi } from '../components.js';
 import { gantt, barChart, lineChart } from '../charts.js';
 import { state, update, setUi } from '../store.js';
 import { guard } from '../app.js';
 import { validateContract, currentPortion, periodSummary } from '../../engine/schedule.js';
 import { sanitizeContract } from '../../engine/data.js';
+import { contractTemplateCsv, contractsToCsv, importContractsCsv } from '../../engine/contractCsv.js';
 import { contractYearly, eFromSchedule } from '../../engine/reports.js';
 import { ASSET_CLASSES, LESSEE_DEPT } from '../../engine/accounts.js';
 import { fmt, ymToIndex, indexToJp, indexToYm, deepClone } from '../../engine/util.js';
 
+const MODEL_SHORT = { jgaap: '日本基準', asc842ol: 'ASC842オペ', offbalance: '短期・少額' };
 const MODEL = { jgaap: '日本基準（IFRS第16号も同じ）', asc842ol: 'ASC第842号 オペレーティング・リース（単一費用）', offbalance: '短期・少額リース等（借手オフバランス）' };
 
 function blankContract(data) {
@@ -35,25 +37,68 @@ export function renderContracts(ctx) {
   const maxI = Math.max(...rows.map((r) => r.end), period.end);
   const tl = rows.length ? gantt({ title: '契約タイムライン', subtitle: '帯：リース期間、✕：中途解約、網掛け：選択中の期間。行をクリックすると詳細を表示', rows, wide: true, min: minI, max: maxI, highlight: { start: period.start, end: period.end } }) : emptyState('契約がありません');
 
-  const list = table([
+  const cols = [
     { label: '契約番号', nowrap: true, render: (c) => h('td', { class: 'nw' }, h('a', { href: '#contracts', on: { click: (e) => { e.preventDefault(); guard(() => setUi({ contractId: c.id })); } } }, c.id)) },
     { label: '契約名', key: 'name' },
-    { label: '貸手 → 借手', render: (c) => `${co(c.lessorCo)} → ${co(c.lesseeCo)}` },
-    { label: '借手の会計モデル', render: (c) => MODEL[c.lessee.model] },
+    { label: '貸手', render: (c) => co(c.lessorCo) },
+    { label: '借手', render: (c) => co(c.lesseeCo) },
+    { label: '借手の会計モデル', render: (c) => MODEL_SHORT[c.lessee.model] },
     { label: '開始', key: 'commencement', nowrap: true },
     { label: '期間', nowrap: true, render: (c) => `${c.termMonths}か月` },
     { label: '1回リース料', num: true, render: (c) => c.payment },
     { label: '当初リース負債', num: true, render: (c) => schedCache.get(c.id)?.meta.L0 ?? null },
     { label: '入力検証', render: (c) => { const e = validateContract(c, data.companies); return h('td', null, e.length ? statusBadge('ng', `${e.length}件`) : statusBadge('ok')); } },
-  ], data.contracts, { rowClass: (c) => (sel && c.id === sel.id ? 'selected' : '') });
+  ];
+  // 契約が多くても画面からあふれないよう、一覧は枠の中でスクロールし、絞り込みもできる
+  const listBox = h('div', { class: 'scroll-y list-box' });
+  const count = h('span', { class: 'muted' });
+  const drawList = (q = '') => {
+    const t = q.trim().toLowerCase();
+    const shown = t ? data.contracts.filter((c) => [c.id, c.name, c.lessorCo, c.lesseeCo, co(c.lessorCo), co(c.lesseeCo)].some((x) => String(x).toLowerCase().includes(t))) : data.contracts;
+    listBox.replaceChildren(shown.length ? table(cols, shown, { rowClass: (c) => (sel && c.id === sel.id ? 'selected' : '') }) : emptyState(t ? '該当する契約がありません' : '契約がありません。「＋ 契約を追加」または「CSVで一括取込」で登録してください。'));
+    count.textContent = t ? `${shown.length}件／全${data.contracts.length}件` : `全${data.contracts.length}件`;
+  };
+  drawList();
+  const filter = h('input', { type: 'search', placeholder: '契約番号・契約名・会社で絞り込み', 'aria-label': '契約の絞り込み', class: 'list-filter', on: { input: (e) => drawList(e.target.value) } });
 
+  const fileInput = h('input', { type: 'file', accept: '.csv,text/csv', hidden: true, on: { change: (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) guard(() => importCsv(f, data)); } } });
   const actions = h('div', { class: 'actions' },
-    h('button', { class: 'btn', type: 'button', on: { click: () => { const nc = blankContract(data); update((d) => d.contracts.push(nc), '契約追加', nc.id); setUi({ contractId: nc.id }); } } }, '＋ 契約を追加'));
+    h('button', { class: 'btn btn-primary', type: 'button', on: { click: () => guard(() => { const nc = blankContract(data); update((d) => d.contracts.push(nc), '契約追加', nc.id); setUi({ contractId: nc.id }); }) } }, '＋ 契約を追加'),
+    h('button', { class: 'btn', type: 'button', on: { click: () => fileInput.click() } }, 'CSVで一括取込'), fileInput,
+    h('button', { class: 'btn', type: 'button', on: { click: () => download('契約取込テンプレート.csv', contractTemplateCsv([{ ...data.contracts.find((c) => c.id === 'K-001') || blankContract(data), id: 'K-101', name: '（記入例）この行は削除して入力してください' }]), 'text/csv;charset=utf-8') } }, '取込用テンプレート'),
+    data.contracts.length ? h('button', { class: 'btn', type: 'button', on: { click: () => download('契約一覧.csv', contractsToCsv(data.contracts), 'text/csv;charset=utf-8') } }, '登録済みの契約を書き出す') : null,
+    h('span', { class: 'spacer' }), filter, count);
 
   return h('div', { class: 'page' },
-    card(null, tl),
-    card('契約一覧', actions, list),
-    sel ? renderDetail(sel, ctx) : card(null, emptyState('一覧またはタイムラインから契約を選ぶと、スケジュール・グラフ・編集画面を表示します。')));
+    card('契約一覧', h('div', { class: 'alert alert-info' }, '契約は1件ずつ追加するほか、CSVでまとめて取り込めます。「取込用テンプレート」の列（貸手・借手は別々の列）に入力して取り込んでください。既存と同じ契約番号の行は上書きします（条件変更・実績の入力は引き継ぎます）。'), actions, listBox),
+    sel ? editor(sel, data) : card(null, emptyState('一覧から契約を選ぶと、ここに編集画面を表示します。')),
+    sel ? renderDetail(sel, ctx) : null,
+    card(null, tl));
+}
+
+/** CSV の一括取込：誤りがあれば行番号つきで表示して取り込まない。なければ件数を確認して取り込む */
+async function importCsv(file, data) {
+  if (file.size > 5 * 1024 * 1024) return toast('ファイルが大きすぎます（上限5MB）', 'error');
+  let text;
+  const buf = await file.arrayBuffer();
+  try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch { text = new TextDecoder('shift_jis').decode(buf); } // 表計算ソフトで保存した Shift_JIS にも対応
+  const r = importContractsCsv(text, data);
+  if (r.errors.length) {
+    const list = h('ul', { class: 'err-list' }, r.errors.slice(0, 30).map((x) => h('li', null, `${x.row ? `${x.row}行目` : ''}${x.id ? `（${x.id}）` : ''}：${x.messages.join('／')}`)));
+    await ask({ title: `取り込めませんでした（誤り ${r.errors.length}件）`, message: 'ファイルを直してから、もう一度取り込んでください。誤りのない行も含め、何も取り込んでいません。', body: h('div', null, list, r.errors.length > 30 ? h('p', { class: 'muted' }, `ほか ${r.errors.length - 30}件`) : null), okLabel: '閉じる' });
+    return;
+  }
+  if (!r.contracts.length) return toast('取り込む契約がありません', 'error');
+  const ok = await ask({ title: `${r.contracts.length}件の契約を取り込みますか？`, message: `新規 ${r.added.length}件${r.added.length ? `（${r.added.slice(0, 10).join('、')}${r.added.length > 10 ? '…' : ''}）` : ''}\n上書き ${r.replaced.length}件${r.replaced.length ? `（${r.replaced.slice(0, 10).join('、')}${r.replaced.length > 10 ? '…' : ''}）` : ''}`, okLabel: '取り込む', danger: r.replaced.length > 0 });
+  if (!ok) return;
+  update((d) => {
+    for (const c of r.contracts) {
+      const i = d.contracts.findIndex((x) => x.id === c.id);
+      if (i >= 0) d.contracts[i] = c; else d.contracts.push(c);
+    }
+  }, '契約の一括取込', `${file.name.slice(0, 80)}：新規${r.added.length}件・上書き${r.replaced.length}件`);
+  setUi({ contractId: r.contracts[0].id });
+  toast(`${r.contracts.length}件を取り込みました`);
 }
 
 /** 年度別サマリーの各数値の計算過程 */
@@ -91,7 +136,7 @@ function renderDetail(c, ctx) {
   const { data, schedCache, yearPeriods, unit } = ctx;
   const sc = schedCache.get(c.id);
   const errs = validateContract(c, data.companies);
-  const parts = [h('h2', { class: 'section-title' }, `${c.id} ${c.name}`)];
+  const parts = [h('h2', { class: 'section-title' }, `スケジュールとグラフ：${c.id} ${c.name}`)];
   if (errs.length) parts.push(h('div', { class: 'alert alert-err' }, h('strong', null, '入力エラー：'), h('ul', null, errs.map((e) => h('li', null, e)))));
   if (sc) {
     const yr = contractYearly(sc, yearPeriods, currentPortion);
@@ -141,7 +186,6 @@ function renderDetail(c, ctx) {
     ], sc.months, { className: 'compact' }))));
     parts.push(actualsCard(c, sc, ctx.periods));
   }
-  parts.push(editor(c, data));
   return h('div', { class: 'detail', id: 'contract-detail' }, ...parts);
 }
 
@@ -275,5 +319,5 @@ function editor(c, data) {
       h('a', { class: 'btn', href: '#journals' }, '次へ：仕訳を確かめる →'),
       dirtyMark));
   const lockNote = (data.locks || []).length ? h('div', { class: 'alert alert-warn' }, `確定済みの期間が ${(data.locks || []).length} 件あります。確定済み期間の数値が変わる変更をすると、検算 CHK-13 が NG になります。条件変更は変更日以降の期間に反映されるよう入力してください。`) : null;
-  return card('契約の編集', lockNote, form);
+  return h('section', { class: 'card', id: 'contract-editor' }, h('h2', null, `契約の編集：${c.id} ${c.name}`), lockNote, form);
 }
