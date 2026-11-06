@@ -46,39 +46,69 @@ export function clear(el) {
   return el;
 }
 
-/** 金額セル（右寄せ、マイナスは△） */
-export function amt(v, opts = {}) {
-  return h('td', { class: `num${v < 0 ? ' neg' : ''}${opts.strong ? ' strong' : ''}` }, v === null || v === undefined ? '' : fmt(v));
+/** 「計算の確認」欄を開く処理（panel.js が登録する） */
+let calcHook = null;
+export function setCalcHook(fn) { calcHook = fn; }
+
+/**
+ * 押せる数値にする（押すと右の「計算の確認」欄に計算過程と出典を表示）
+ * @param {HTMLElement} el 対象の要素（td なら vcell、文中なら v）
+ * @param {() => object} infoFn 表示内容を返す関数（押したときに計算）
+ */
+export function calcable(el, infoFn) {
+  if (!infoFn) return el;
+  el.classList.add(el.tagName === 'TD' ? 'vcell' : 'v');
+  el.tabIndex = 0;
+  el.setAttribute('role', 'button');
+  el.title = '押すと計算の確認を表示';
+  const open = () => calcHook && calcHook(infoFn(), el);
+  el.addEventListener('click', open);
+  el.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+  return el;
 }
 
-/** 表を作る。cols: [{label, key|render, num}] */
+/** 金額セル（右寄せ、マイナスは△）。opts.calc を渡すと押せる数値になる */
+export function amt(v, opts = {}) {
+  const td = h('td', { class: `num${opts.strong ? ' strong' : ''}` }, v === null || v === undefined ? '' : fmt(v));
+  if (opts.calc && v !== null && v !== undefined) calcable(td, opts.calc);
+  return td;
+}
+
+/** 表を作る。cols: [{label, key|render, num, nowrap, calc(row) → 計算の確認の内容}] */
 export function table(cols, rows, opts = {}) {
-  const thead = h('thead', null, h('tr', null, cols.map((c) => h('th', { class: c.num ? 'num' : '', scope: 'col', title: c.title }, c.label))));
+  const thead = h('thead', null, h('tr', null, cols.map((c) => h('th', { scope: 'col', title: c.title, class: c.nowrap ? 'nw' : '' }, c.label))));
   const tbody = h('tbody', null, rows.map((r) => h('tr', { class: opts.rowClass ? opts.rowClass(r) : '' }, cols.map((c) => {
     const v = c.render ? c.render(r) : r[c.key];
     if (v instanceof Node) return v.tagName === 'TD' ? v : h('td', { class: c.num ? 'num' : '' }, v);
-    if (c.num) return amt(v);
-    return h('td', null, v ?? '');
+    if (c.num) return amt(v, { calc: c.calc ? () => c.calc(r) : null });
+    return h('td', { class: c.nowrap ? 'nw' : '' }, v ?? '');
   }))));
   const tfoot = opts.foot ? h('tfoot', null, opts.foot) : null;
-  return h('div', { class: 'table-wrap' }, h('table', { class: `tbl ${opts.className || ''}` }, opts.caption ? h('caption', null, opts.caption) : null, thead, tbody, tfoot));
+  return h('div', { class: 'tbl-wrap' }, h('table', { class: `tbl ${opts.className || ''}` }, opts.caption ? h('caption', null, opts.caption) : null, thead, tbody, tfoot));
 }
 
-/** 状態アイコン（色だけに頼らず、記号とラベルを併記） */
+/** 状態のバッジ（色だけに頼らず、記号とラベルを併記）：OK＝緑、確認事項＝黄、NG＝赤 */
 export function statusBadge(status, label) {
-  const map = { ok: ['✓', 'OK'], warn: ['!', '警告'], ng: ['✕', 'NG'] };
-  const [icon, text] = map[status] || ['?', status];
-  return h('span', { class: `badge st-${status}`, role: 'status' }, h('span', { class: 'badge-icon', 'aria-hidden': 'true' }, icon), label || text);
+  const map = { ok: ['✓', 'OK', 'badge ok'], warn: ['!', '確認', 'badge caution'], ng: ['✕', 'NG', 'badge warn'] };
+  const [icon, text, cls] = map[status] || ['?', status, 'badge'];
+  return h('span', { class: cls, role: 'status' }, h('span', { 'aria-hidden': 'true' }, `${icon} `), label || text);
 }
 
 export function card(title, ...children) {
   return h('section', { class: 'card' }, title ? h('h2', { class: 'card-title' }, title) : null, ...children);
 }
 
-export function field(label, input, help) {
+/**
+ * 入力欄（form-grid の1行：ラベル＋入力欄＋出典のバッジ）
+ * @param {string} src 出典（契約書・借手の帳簿・貸手の帳簿・既定値 など）
+ */
+export function field(label, input, help, src) {
   const id = `f-${Math.random().toString(36).slice(2, 9)}`;
   input.id = id;
-  return h('div', { class: 'field' }, h('label', { for: id }, label), input, help ? h('div', { class: 'help' }, help) : null);
+  return [
+    h('label', { for: id, class: 'fg-label' }, label),
+    h('div', { class: 'fg-input' }, h('div', { class: 'row' }, input, src ? h('span', { class: `src${src === '既定値' ? ' manual' : ''}` }, src) : null), help ? h('div', { class: 'small muted' }, help) : null),
+  ];
 }
 
 export function select(options, value, onChange) {
@@ -96,14 +126,14 @@ export function ask({ title, message = '', okLabel = '実行する', danger = fa
     const err = h('div', { class: 'ask-err', hidden: true }, '入力してください');
     let overlay;
     const close = (v) => { overlay.remove(); if (prev && prev.focus) prev.focus(); resolve(v); };
-    const ok = h('button', { class: `btn ${danger ? 'danger-solid' : 'primary'}`, type: 'button', on: { click: () => {
+    const ok = h('button', { class: `btn ${danger ? 'btn-danger' : 'btn-primary'}`, type: 'button', on: { click: () => {
       if (ta && !ta.value.trim()) { err.hidden = false; ta.focus(); return; }
       close(ta ? ta.value.trim() : true);
     } } }, okLabel);
     const cancel = h('button', { class: 'btn', type: 'button', on: { click: () => close(null) } }, 'キャンセル');
-    const box = h('div', { class: 'ask', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'ask-title' },
-      h('h2', { id: 'ask-title' }, title), message ? h('p', { class: 'ask-msg' }, message) : null, ta, err, h('div', { class: 'actions' }, cancel, ok));
-    overlay = h('div', { class: 'overlay', on: { keydown: (e) => { if (e.key === 'Escape') close(null); }, click: (e) => { if (e.target === overlay) close(null); } } }, box);
+    const box = h('div', { class: 'modal ask', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'ask-title' },
+      h('div', { class: 'modal-head' }, h('b', { id: 'ask-title' }, title)), message ? h('p', { class: 'ask-msg' }, message) : null, ta, err, h('div', { class: 'row ask-actions' }, h('span', { class: 'spacer' }), cancel, ok));
+    overlay = h('div', { class: 'modal-bg', on: { keydown: (e) => { if (e.key === 'Escape') close(null); }, click: (e) => { if (e.target === overlay) close(null); } } }, box);
     document.body.appendChild(overlay);
     (ta || ok).focus();
   });
@@ -119,7 +149,7 @@ export function download(filename, content, type) {
   const note = h('div', { class: 'help' }, 'ファイルとして保存できない環境では「コピー」して、表計算ソフトやテキストエディタに貼り付けてください。');
   let overlay;
   const close = () => { overlay.remove(); if (prev && prev.focus) prev.focus(); };
-  const copy = h('button', { class: 'btn primary', type: 'button', on: { click: () => {
+  const copy = h('button', { class: 'btn btn-primary', type: 'button', on: { click: () => {
     const done = () => toast('コピーしました');
     try {
       navigator.clipboard.writeText(ta.value).then(done, () => { ta.select(); toast('自動でコピーできないため、選択された文字を Ctrl+C（⌘C）でコピーしてください', 'error'); });
@@ -134,10 +164,10 @@ export function download(filename, content, type) {
       setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
     } catch { toast('この環境ではファイルとして保存できません。コピーしてください', 'error'); }
   } } }, 'ファイルとして保存');
-  const box = h('div', { class: 'ask wide', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'export-title' },
-    h('h2', { id: 'export-title' }, `書き出し：${filename}`), note, ta,
-    h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', on: { click: close } }, '閉じる'), save, copy));
-  overlay = h('div', { class: 'overlay', on: { keydown: (e) => { if (e.key === 'Escape') close(); } } }, box);
+  const box = h('div', { class: 'modal ask wide', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'export-title' },
+    h('div', { class: 'modal-head' }, h('b', { id: 'export-title' }, `書き出し：${filename}`)), note, ta,
+    h('div', { class: 'row ask-actions' }, h('span', { class: 'spacer' }), h('button', { class: 'btn', type: 'button', on: { click: close } }, '閉じる'), save, copy));
+  overlay = h('div', { class: 'modal-bg', on: { keydown: (e) => { if (e.key === 'Escape') close(); } } }, box);
   document.body.appendChild(overlay);
   copy.focus();
 }

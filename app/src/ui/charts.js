@@ -2,7 +2,9 @@
 import { h, s, table } from './dom.js';
 import { fmt } from '../engine/util.js';
 
-const W = 720;
+// 図の座標幅。横長（wide）の図は座標幅を広げ、画面幅いっぱいに引き伸ばしても文字が大きくなりすぎないようにする
+const BASE_W = 720;
+const WIDE_W = 1080;
 const PAD = { l: 72, r: 16, t: 16, b: 44 };
 
 function niceTicks(min, max, n = 5) {
@@ -74,6 +76,7 @@ function axes(g, x0, x1, y, ticks, labels, xPos, unit) {
  * opts: { title, labels, series:[{name, values, color, dashed}], band:{upper, lower, name, color}, unit }
  */
 export function lineChart(opts) {
+  const W = opts.wide ? WIDE_W : BASE_W;
   const H = opts.height || 280;
   const ih = H - PAD.t - PAD.b;
   const iw = W - PAD.l - PAD.r;
@@ -126,6 +129,7 @@ export function lineChart(opts) {
  * opts: { title, labels, series:[{name, values, color}], stacked, line:{name, values, color}, unit }
  */
 export function barChart(opts) {
+  const W = opts.wide ? WIDE_W : BASE_W;
   const H = opts.height || 280;
   const ih = H - PAD.t - PAD.b;
   const iw = W - PAD.l - PAD.r;
@@ -196,6 +200,7 @@ export function barChart(opts) {
  * opts: { title, steps:[{label, value, total}], unit }
  */
 export function waterfall(opts) {
+  const W = opts.wide ? WIDE_W : BASE_W;
   const H = opts.height || 300;
   const ih = H - PAD.t - PAD.b - 20;
   const iw = W - PAD.l - PAD.r;
@@ -247,6 +252,7 @@ export function waterfall(opts) {
  * opts: { title, nodes:[{id,label,sub}], edges:[{from,to,label,detail,weight}] }
  */
 export function network(opts) {
+  const W = opts.wide ? WIDE_W : BASE_W;
   const H = opts.height || 360;
   const cx = W / 2, cy = H / 2;
   const R = Math.min(W, H) / 2 - 70;
@@ -270,7 +276,8 @@ export function network(opts) {
     const dx = b.x - a.x, dy = b.y - a.y;
     const len = Math.hypot(dx, dy) || 1;
     const nx = -dy / len, ny = dx / len;
-    const bend = (e.from < e.to ? 1 : -1) * (28 + (idx - 1) * 22);
+    // 法線は向きで反転するため、往復の線は自然に左右へ分かれる
+    const bend = 28 + (idx - 1) * 22;
     const sx = a.x + (dx / len) * 46, sy = a.y + (dy / len) * 46;
     const ex = b.x - (dx / len) * 50, ey = b.y - (dy / len) * 50;
     const mx = (sx + ex) / 2 + nx * bend, my = (sy + ey) / 2 + ny * bend;
@@ -299,6 +306,7 @@ export function network(opts) {
  * opts: { title, rows:[{label, start, end, termination, color}], min, max, highlight:{start,end}, monthLabel }
  */
 export function gantt(opts) {
+  const W = opts.wide ? WIDE_W : BASE_W;
   const rowH = 30;
   const top = 26;
   const H = top + rowH * opts.rows.length + 10;
@@ -306,7 +314,7 @@ export function gantt(opts) {
   const iw = W - L - PAD.r;
   const x = (m) => L + ((m - opts.min) / (opts.max - opts.min + 1)) * iw;
   const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, class: 'svg', role: 'img', 'aria-label': opts.title });
-  const f = frame({ ...opts, legend: [{ name: 'リース期間', color: 'var(--s1)', kind: 'box' }, { name: '選択中の期間', color: 'var(--hl)', kind: 'area' }] }, svg,
+  const f = frame({ ...opts, legend: [{ name: 'リース期間', color: 'var(--s1)', kind: 'box' }, { name: '選択中の期間', color: 'var(--cyan)', kind: 'area' }] }, svg,
     table([{ label: '契約', key: 'label' }, { label: '開始', key: 'startLabel' }, { label: '終了', key: 'endLabel' }, { label: '備考', key: 'note' }], opts.rows));
   if (opts.highlight) svg.append(s('rect', { x: x(opts.highlight.start), y: top - 6, width: Math.max(x(opts.highlight.end + 1) - x(opts.highlight.start), 1), height: H - top, class: 'hl' }));
   for (let y0 = Math.ceil(opts.min / 12) * 12; y0 <= opts.max; y0 += 12) {
@@ -316,7 +324,8 @@ export function gantt(opts) {
   opts.rows.forEach((r, i) => {
     const yy = top + i * rowH;
     svg.append(s('text', { x: 8, y: yy + 18, class: 'tick row-label' }, r.label.length > 22 ? `${r.label.slice(0, 21)}…` : r.label));
-    const bar = s('rect', { x: x(r.start), y: yy + 6, width: Math.max(x(r.end + 1) - x(r.start), 2), height: rowH - 12, rx: 4, class: 'bar', style: { '--c': r.color || 'var(--s1)' } });
+    const bx = Math.max(L, x(r.start));
+    const bar = s('rect', { x: bx, y: yy + 6, width: Math.max(x(r.end + 1) - bx, 2), height: rowH - 12, rx: 4, class: 'bar', style: { '--c': r.color || 'var(--s1)' } });
     svg.append(bar);
     if (r.termination !== null && r.termination !== undefined) {
       svg.append(s('text', { x: x(r.termination + 1), y: yy + 20, class: 'mark', 'text-anchor': 'middle' }, '✕'));

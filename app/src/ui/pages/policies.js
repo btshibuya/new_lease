@@ -128,7 +128,7 @@ function exampleFor(def) {
         { a: '連結上の原価（貸手の減価償却費）のうち期末在庫に含まれるべき額（600×10%）', b: 60 },
         { a: '棚卸資産の修正額（連結上の在庫を減額）', b: -40 },
       ], { className: 'compact' }),
-      h('p', { class: 'help' }, '「手入力で調整」の場合は、仕訳画面の手入力仕訳で（借）売上原価 40 ／（貸）棚卸資産 40 のように計上します（翌期は戻し）。'));
+      h('div', { class: 'alert alert-info' }, '「手入力で調整」の場合は、仕訳画面の手入力仕訳で（借）売上原価 40 ／（貸）棚卸資産 40 のように計上します（翌期は戻し）。'));
   }
   return lazyDetails('example', '設例で選択肢を比較する（仕訳例・グラフ）', () => exampleGrid(def));
 }
@@ -197,7 +197,7 @@ function policyCard(def, ctx) {
   const note = h('textarea', { rows: 3, maxlength: 4000, placeholder: '例）2027年10月 監査法人と協議済。○○の理由で既定値を採用。', value: state.data.notes[def.id] || '' });
   return h('section', { class: 'card policy', id: def.id },
     h('header', { class: 'policy-head' },
-      h('span', { class: 'tpl' }, def.id), h('span', { class: 'chip' }, def.category), h('h2', null, def.title),
+      h('span', { class: 'tpl' }, def.id), h('span', { class: 'badge' }, def.category), h('h2', null, def.title),
       isDefault ? statusBadge('ok', '既定値を選択中') : statusBadge('warn', '既定値から変更')),
     h('p', { class: 'bg' }, def.background),
     opts,
@@ -212,18 +212,17 @@ function policyCard(def, ctx) {
 export function renderPolicies(ctx) {
   const pol = state.policies;
   const summary = table([
-    { label: 'No.', render: (d) => h('td', null, h('a', { href: '#policies', on: { click: (e) => { e.preventDefault(); document.getElementById(d.id)?.scrollIntoView({ behavior: 'smooth' }); } } }, d.id)) },
+    { label: 'No.', nowrap: true, render: (d) => h('td', { class: 'nw' }, h('a', { href: '#policies', on: { click: (e) => { e.preventDefault(); document.getElementById(d.id)?.scrollIntoView({ behavior: 'smooth' }); } } }, d.id)) },
     { label: '区分', key: 'category' },
     { label: '論点', key: 'title' },
     { label: '現在の選択', render: (d) => d.options.find((o) => o.value === pol[d.id])?.label },
     { label: '状態', render: (d) => h('td', null, pol[d.id] === d.default ? statusBadge('ok', '既定値') : statusBadge('warn', '変更あり')) },
-    { label: '協議メモ', render: (d) => (state.data.notes[d.id] ? '記入済' : '—') },
+    { label: '協議メモ', nowrap: true, render: (d) => (state.data.notes[d.id] ? '記入済' : '—') },
   ], POLICIES);
   return h('div', { class: 'page' },
-    h('h1', null, '会計方針設定'),
     card(null,
       h('p', null, '要件定義書 第11章の「監査法人等と協議すべき論点」について、基準・適用指針・実務対応報告や公表解説をもとに最も適切と考えられる処理を既定値にしています。選択を変えると、すべての仕訳・精算表・検算に直ちに反映されます。各論点では、現在のデータでの影響額の比較と、設例（仕訳例・グラフ）を確認できます。'),
-      h('p', { class: 'help' }, '「推奨（既定値）」は会計上の判断にもとづく推奨、「既定値（自社方針に合わせて選択）」は自社の既存方針・借手の計算方法に合わせて選ぶ論点の初期値です。「要原文確認」の参照は、条番号等を基準の原文で確認する必要があるものです。最終的な方針は会計監査人と協議のうえ決定し、協議メモに記録してください（変更履歴は監査ログに残ります）。'),
+      h('div', { class: 'alert alert-info' }, '「推奨（既定値）」は会計上の判断にもとづく推奨、「既定値（自社方針に合わせて選択）」は自社の既存方針・借手の計算方法に合わせて選ぶ論点の初期値です。「要原文確認」の参照は、条番号等を基準の原文で確認する必要があるものです。最終的な方針は会計監査人と協議のうえ決定し、協議メモに記録してください（変更履歴は監査ログに残ります）。'),
       summary,
       h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', on: { click: async () => {
         if (!(await ask({ title: 'すべての会計方針を既定値に戻しますか？', message: '変更内容は監査ログに記録されます。', okLabel: '既定値に戻す' }))) return;

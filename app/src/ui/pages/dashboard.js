@@ -18,13 +18,20 @@ export function renderDashboard(ctx) {
   const ngs = checks.filter((c) => c.status === 'ng').length;
   const warns = checks.filter((c) => c.status === 'warn').length;
 
-  const kpis = h('div', { class: 'kpis' },
+  // 数値を押すと「計算の確認」：契約ごとの内訳
+  const sumE = (o) => Object.values(o).reduce((a, v) => a + v, 0);
+  const byContract = (title, value, fn, note) => () => {
+    const rows = res.map((r) => ({ id: r.contract.id, name: r.contract.name, v: fn(r) })).filter((x) => x.v);
+    return { context: `全体の状況・${period.label}`, title, value, breakdown: { title: `契約ごとの内訳（${rows.length}件）`, cols: [{ label: '契約', key: 'id' }, { label: '契約名', key: 'name' }, { label: '金額', key: 'v', num: true }], rows: [...rows, { id: '合計', name: '', v: rows.reduce((a, x) => a + x.v, 0), total: true }] }, notes: note ? [note] : [], sources: [{ label: '契約・スケジュール' }, { label: '仕訳', kind: 'journal' }] };
+  };
+  const kpis = h('div', { class: 'kpi' },
     kpi('当期に有効な契約', `${active} 件`, `登録 ${data.contracts.length} 件`),
-    kpi('期末に消去するリース負債', fmt(L), '借手個別の残高（流動＋固定）', { accent: 'lessee' }),
-    kpi('期末に消去する使用権資産（簿価）', fmt(rou), '取得原価−減価償却累計額', { accent: 'lessee' }),
-    kpi('当期の連結損益への影響（税引前）', fmt(plPre), '＋は消去により連結利益が増加', { accent: 'diff' }),
-    kpi('法人税等調整額 ／ 非支配株主に帰属する利益', `${fmt(tax)} ／ ${fmt(nci)}`, '当期の連結修正による増減（＋は費用・帰属額の増加）'),
-    kpi('検算', h('span', null, ngs ? statusBadge('ng', `NG ${ngs}件`) : warns ? statusBadge('warn', `警告 ${warns}件`) : statusBadge('ok', 'すべてOK')), h('a', { href: '#checks' }, '検算の詳細へ')));
+    kpi('期末に消去するリース負債', fmt(L), '借手個別の残高（流動＋固定）', { accent: 'lessee', calc: byContract('期末に消去するリース負債', L, (r) => r.ps.close.L) }),
+    kpi('期末に消去する使用権資産（簿価）', fmt(rou), '取得原価−減価償却累計額', { accent: 'lessee', calc: byContract('期末に消去する使用権資産（簿価）', rou, (r) => r.ps.close.cost - r.ps.close.acc) }),
+    kpi('当期の連結損益への影響（税引前）', fmt(plPre), '＋は消去により連結利益が増加', { accent: 'diff', calc: byContract('当期の連結損益への影響（税引前）', plPre, (r) => sumE(r.E.close) - sumE(r.E.open), '期末の消去差額（純資産修正額）−期首の消去差額。借手の費用（償却費＋利息）と貸手の定額収益の差です。') }),
+    kpi('法人税等調整額', fmt(tax), '当期の連結修正による増減（＋は費用の増加）', { calc: byContract('法人税等調整額', tax, (r) => sumE(r.DT.close) - sumE(r.DT.open), '会社ごとの消去差額 × 法定実効税率の期末額 − 期首額（個別税効果の取消）。') }),
+    kpi('非支配株主に帰属する利益', fmt(nci), '当期の連結修正による増減', { calc: byContract('非支配株主に帰属する当期純利益', nci, (r) => r.journals.flatMap((j) => j.lines).filter((l) => l.acc === 'NCI_PL').reduce((a, l) => a + l.amt, 0), '（借手・貸手の税効果後の消去差額の合計）× 借手の非支配株主持分比率 の当期の増減。') }),
+    kpi('検算', h('span', null, ngs ? statusBadge('ng', `NG ${ngs}件`) : warns ? statusBadge('warn', `確認事項 ${warns}件`) : statusBadge('ok', 'すべてOK')), h('a', { href: '#checks' }, '検算の詳細へ')));
 
   // 相関図
   const involved = new Set(data.contracts.flatMap((c) => [c.lessorCo, c.lesseeCo]));
@@ -66,7 +73,6 @@ export function renderDashboard(ctx) {
   ], checks));
 
   return h('div', { class: 'page' },
-    h('h1', null, `ダッシュボード（${period.label}）`),
     kpis,
     h('div', { class: 'grid2' }, card(null, net), card(null, diffChart)),
     card(null, plChart),

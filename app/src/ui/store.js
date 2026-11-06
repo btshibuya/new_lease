@@ -19,7 +19,8 @@ function loadRaw() {
 export const state = {
   data: null,
   policies: null,
-  ui: { granularity: 'year', periodIndex: null, contractId: null, journalFilter: {}, theme: null },
+  ui: { granularity: 'year', periodIndex: null, contractId: null, journalFilter: {}, palette: 'bt', menuOpen: false },
+  dirty: null, // 保存していない変更（画面名）。画面移動の前に確認する
   storageOk: true,
   loadWarnings: [],
   loadError: null,
@@ -35,7 +36,7 @@ export function init() {
       state.data = res.data;
       state.loadWarnings = res.warnings;
       state.policies = sanitizePolicies(raw.policies);
-      state.ui = { ...state.ui, ...(raw.ui && typeof raw.ui === 'object' ? { granularity: raw.ui.granularity === 'quarter' ? 'quarter' : 'year', periodIndex: Number.isInteger(raw.ui.periodIndex) ? raw.ui.periodIndex : null, theme: ['light', 'dark'].includes(raw.ui.theme) ? raw.ui.theme : null } : {}) };
+      state.ui = { ...state.ui, ...(raw.ui && typeof raw.ui === 'object' ? { granularity: raw.ui.granularity === 'quarter' ? 'quarter' : 'year', periodIndex: Number.isInteger(raw.ui.periodIndex) ? raw.ui.periodIndex : null, palette: ['bt', 'light', 'dark'].includes(raw.ui.palette) ? raw.ui.palette : 'bt' } : {}) };
     } catch (e) {
       // 読込に失敗しても元のデータは消さず、別のキーに退避してから初期状態で開く
       try { localStorage.setItem(`${KEY}.backup.${Date.now()}`, JSON.stringify(raw)); } catch { /* 退避できない場合も続行 */ }
@@ -53,7 +54,7 @@ export function init() {
 
 export function save() {
   try {
-    localStorage.setItem(KEY, JSON.stringify({ data: state.data, policies: state.policies, ui: { granularity: state.ui.granularity, periodIndex: state.ui.periodIndex, theme: state.ui.theme } }));
+    localStorage.setItem(KEY, JSON.stringify({ data: state.data, policies: state.policies, ui: { granularity: state.ui.granularity, periodIndex: state.ui.periodIndex, palette: state.ui.palette } }));
     state.storageOk = true;
   } catch {
     state.storageOk = false;

@@ -8,24 +8,24 @@ export function renderChecks(ctx) {
   const n = (s) => checks.filter((c) => c.status === s).length;
   const locked = isLocked(period);
   const lockBox = card('期間の確定（締め）',
-    h('p', { class: 'help' }, '確定すると、この期間の仕訳（契約別・科目別の金額）をスナップショットとして保存します。以後、契約・会社マスタ・会計方針を変更して確定済み期間の数値が変わると、検算 CHK-13 が NG になります（過去の連結財務諸表との不一致を防ぐため）。NG が残る期間は確定できません。'),
+    h('div', { class: 'alert alert-info' }, '確定すると、この期間の仕訳（契約別・科目別の金額）を確定時の記録として保存します。以後、契約・会社マスタ・会計方針を変更して確定済み期間の数値が変わると、検算 CHK-13 が NG になります（過去の連結財務諸表との不一致を防ぐため）。NG が残る期間は確定できません。'),
     locked
       ? h('div', { class: 'actions' }, statusBadge('ok', `${period.label} は確定済み`),
-        h('button', { class: 'btn danger', type: 'button', on: { click: async () => {
+        h('button', { class: 'btn btn-danger', type: 'button', on: { click: async () => {
           const reason = await ask({ title: `${period.label} の確定を解除しますか？`, message: '解除の理由は監査ログに記録されます。', input: '解除の理由（必須）', okLabel: '確定を解除する', danger: true });
           if (!reason) return;
           unlockPeriod(period, reason.slice(0, 300));
           toast('確定を解除しました');
         } } }, '確定を解除する'))
       : h('div', { class: 'actions' },
-        h('button', { class: 'btn primary', type: 'button', disabled: status === 'ng', title: status === 'ng' ? 'NG の検算があるため確定できません' : '', on: { click: async () => {
-          if (!(await ask({ title: `${period.label} を確定しますか？`, message: 'この期間の仕訳をスナップショットとして保存します。以後、確定済み期間の数値が変わる変更をすると検算 CHK-13 が NG になります。', okLabel: '確定する' }))) return;
+        h('button', { class: 'btn btn-primary', type: 'button', disabled: status === 'ng', title: status === 'ng' ? 'NG の検算があるため確定できません' : '', on: { click: async () => {
+          if (!(await ask({ title: `${period.label} を確定しますか？`, message: 'この期間の仕訳を確定時の記録として保存します。以後、確定済み期間の数値が変わる変更をすると検算 CHK-13 が NG になります。', okLabel: '確定する' }))) return;
           lockPeriod(period, snapshotNets(gen, state.policies, names), state.policies);
           toast(`${period.label} を確定しました`);
         } } }, `${period.label} を確定する`),
         status === 'ng' ? h('span', { class: 'muted' }, 'NG の検算を解消すると確定できます') : null),
     (state.data.locks || []).length ? table([{ label: '確定済み期間', key: 'label' }, { label: '確定日時', render: (l) => new Date(l.lockedAt).toLocaleString('ja-JP') }, { label: '契約・手入力仕訳の数', render: (l) => Object.keys(l.snapshot).length }], state.data.locks, { className: 'compact' }) : null,
-    ...(state.data.locks || []).map((l) => h('details', null, h('summary', null, `${l.label} の確定時の内容（契約別・表示科目別の金額）を見る`),
+    ...(state.data.locks || []).map((l) => h('details', null, h('summary', null, `${l.label} を確定したときの記録（契約別・表示科目別の金額）を見る`),
       table([{ label: '契約', key: 'cid' }, { label: '表示科目｜会社', key: 'k' }, { label: '金額（借方＋）', key: 'v', num: true }],
         Object.entries(l.snapshot).flatMap(([cid, v]) => Object.entries(v.nets || {}).map(([k, val]) => ({ cid, k, v: val }))), { className: 'compact' }))));
 
@@ -36,15 +36,14 @@ export function renderChecks(ctx) {
   };
 
   return h('div', { class: 'page' },
-    h('h1', null, `検算（${period.label}）`),
-    h('div', { class: 'kpis' },
+    h('div', { class: 'kpi' },
       kpi('OK', `${n('ok')} 項目`, null, { accent: 'good' }),
       kpi('警告', `${n('warn')} 項目`, '内容を確認し判断を記録', { accent: 'warn' }),
       kpi('NG', `${n('ng')} 項目`, 'NGが残る期間は確定できません', { accent: 'crit' })),
-    card(null, h('p', { class: 'help' }, '各検算の「検証方法」は、その検算が仕訳の作成とどの程度独立しているかを示します。「別経路で計算」「別実装で再計算」「公式による再計算」は、仕訳とは異なる計算で期待値を作って比較するものです。自動テストでは、意図的に入れた28種類の誤り（税効果・非支配株主持分・償却・利息・条件変更・遡及測定・CF など）をすべて検出することを確認していますが、すべての誤りを検出できるわけではありません。特に、契約条件そのものの入力誤りや、借手・貸手の帳簿との差は「外部との突合」（CHK-10）でしか検出できません。「外部との突合」は個別帳簿の実績が入力されている場合のみ有効です。')),
+    card(null, h('div', { class: 'alert alert-info' }, '各検算の「検証方法」は、その検算が仕訳の作成とどの程度独立しているかを示します。「別経路で計算」「別実装で再計算」「公式による再計算」は、仕訳とは異なる計算で期待値を作って比較するものです。自動テストでは、意図的に入れた28種類の誤り（税効果・非支配株主持分・償却・利息・条件変更・遡及測定・CF など）をすべて検出することを確認していますが、すべての誤りを検出できるわけではありません。特に、契約条件そのものの入力誤りや、借手・貸手の帳簿との差は「外部との突合」（CHK-10）でしか検出できません。「外部との突合」は個別帳簿の実績が入力されている場合のみ有効です。')),
     lockBox,
-    ...checks.map((c) => h('section', { class: `card check st-border-${c.status}` },
-      h('header', { class: 'check-head' }, statusBadge(c.status), h('h2', null, `${c.id} ${c.title}`), c.independence ? h('span', { class: 'chip' }, `検証方法：${c.independence}`) : null),
+    ...checks.map((c) => h('section', { class: `card check st-border-${c.status}`, id: c.id },
+      h('header', { class: 'check-head' }, statusBadge(c.status), h('h2', null, `${c.id} ${c.title}`), c.independence ? h('span', { class: 'badge' }, `検証方法：${c.independence}`) : null),
       h('p', null, c.detail),
       c.id === 'CHK-12' && c.rows.length ? noteInput('CHK-12') : null,
       c.rows.length ? h('details', { open: c.status === 'ng' }, h('summary', null, `明細（${c.rows.length}件）`),

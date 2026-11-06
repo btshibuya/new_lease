@@ -21,7 +21,7 @@ export function renderJournals(ctx) {
     h('label', null, '区分 ', select([['all', 'すべて'], ['IND', '個社修正'], ['CON', '連結修正']], filter.kind, (v) => { filter.kind = v; rerender(); })),
     h('label', null, '契約 ', select([['all', 'すべて'], ...data.contracts.map((c) => [c.id, `${c.id} ${c.name}`])], filter.contract, (v) => { filter.contract = v; rerender(); })),
     h('label', null, 'テンプレート ', select([['all', 'すべて'], ...tpls.map((t) => [t, `${t} ${TEMPLATES[t]?.title || ''}`])], filter.tpl, (v) => { filter.tpl = v; rerender(); })),
-    h('button', { class: 'btn', type: 'button', on: { click: () => exportCsv(js, ctx) } }, '仕訳帳をCSV出力'));
+    h('button', { class: 'btn', type: 'button', on: { click: () => exportCsv(js, ctx) } }, '仕訳帳を書き出す（表計算ソフト用 CSV）'));
 
   // T勘定
   const accLabels = [...new Set(js.flatMap((j) => j.lines.map((l) => accountLabel(l, pol, names))))].sort();
@@ -39,14 +39,13 @@ export function renderJournals(ctx) {
   }
 
   return h('div', { class: 'page' },
-    h('h1', null, `仕訳（${period.label}）`),
-    h('div', { class: 'kpis' },
+    h('div', { class: 'kpi' },
       kpi('仕訳本数', `${js.length} 本`, `個社修正 ${js.filter((j) => j.kind === 'IND').length}／連結修正 ${js.filter((j) => j.kind === 'CON').length}`),
       kpi('借方合計 ／ 貸方合計', `${fmt(dr)} ／ ${fmt(cr)}`, dr === cr ? '一致' : '不一致'),
       kpi('当期の損益への影響（税引前）', fmt(pl), '表示中の仕訳による連結利益の増減', { accent: 'diff' }),
       kpi('法人税等調整額', fmt(tax), '＋は税金費用の増加')),
     card(null, controls),
-    card('T勘定ビュー', tSel, tView),
+    card('T勘定（科目ごとの借方・貸方の明細）', tSel, tView),
     manualCard(ctx),
     js.length ? h('div', { class: 'journals' }, js.map((j) => journalCard(j, { pol, names, companies }))) : card(null, emptyState('該当する仕訳はありません')));
 }
@@ -87,7 +86,7 @@ function manualCard(ctx) {
   };
   const existing = (data.manualJournals || []).filter((m) => m.periodStart >= indexToYm(period.start) && m.periodEnd <= indexToYm(period.end));
   return card('手入力仕訳（理由必須・監査ログに記録）',
-    h('p', { class: 'help' }, '自動作成の対象外の調整（棚卸資産に含まれる償却費、変動リース料・非リース構成部分、決算日差異の調整など）を入力します。選択中の期間に計上され、精算表・期間確定の対象になります。年度の表示には、その年度内の四半期に入力した仕訳も含まれます。手入力仕訳には税効果・非支配株主持分の按分は自動計算されないため、必要なら別の行で入力してください。'),
+    h('div', { class: 'alert alert-info' }, '自動作成の対象外の調整（棚卸資産に含まれる償却費、変動リース料・非リース構成部分、決算日差異の調整など）を入力します。選択中の期間に計上され、精算表・期間確定の対象になります。年度の表示には、その年度内の四半期に入力した仕訳も含まれます。手入力仕訳には税効果・非支配株主持分の按分は自動計算されないため、必要なら別の行で入力してください。'),
     existing.length ? h('ul', null, existing.map((m) => h('li', null, `${m.title}（${m.reason}）`, ' ', h('button', { class: 'btn-link danger', type: 'button', on: { click: async () => {
       const why = await ask({ title: `手入力仕訳「${m.title}」を削除しますか？`, message: '削除の理由は監査ログに記録されます。', input: '削除の理由（必須）', okLabel: '削除する', danger: true });
       if (!why) return;
@@ -103,7 +102,7 @@ function manualCard(ctx) {
         h('div', { class: 'field' }, h('label', null, '証憑・計算資料'), h('input', { type: 'text', maxlength: 300, on: { input: (e) => { draft.evidence = e.target.value; } } }))),
       h('div', { class: 'table-wrap' }, h('table', { class: 'tbl compact' }, h('thead', null, h('tr', null, ['科目', '科目名（手入力科目）', '会社', '借方', '貸方', ''].map((t) => h('th', null, t)))), body)),
       h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', on: { click: () => { draft.lines.push({ acc: 'MANUAL', label: '', co: 'CONSOL', dr: '', cr: '' }); drawRows(); } } }, '＋ 行を追加'), bal,
-        h('button', { class: 'btn primary', type: 'button', on: { click: save } }, '保存'))));
+        h('button', { class: 'btn btn-primary', type: 'button', on: { click: save } }, '保存'))));
 }
 
 function exportCsv(js, ctx) {

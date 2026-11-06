@@ -68,21 +68,24 @@ export function worksheet(gen, companies, pol, names, period) {
   const key = (l) => accountLabel(l, pol, names);
   const get = (l) => {
     const k = key(l);
-    if (!rows.has(k)) rows.set(k, { label: k, acc: l.acc, meta: l.meta, type: ACCOUNTS[l.acc]?.type, lessee: 0, lessor: 0, ind: 0, con: 0 });
+    // items：計算の確認（内訳）用に、どの契約・仕訳から来た金額かを保持する
+    if (!rows.has(k)) rows.set(k, { label: k, acc: l.acc, meta: l.meta, type: ACCOUNTS[l.acc]?.type, lessee: 0, lessor: 0, ind: 0, con: 0, items: [] });
     return rows.get(k);
   };
   for (const r of gen.results) {
     for (const l of individualLines(r, companies, pol)) {
       const row = get(l);
-      if (ACCOUNTS[l.acc]?.side === 'R') row.lessor += l.amt;
-      else row.lessee += l.amt;
+      const col = ACCOUNTS[l.acc]?.side === 'R' ? 'lessor' : 'lessee';
+      row[col] += l.amt;
+      row.items.push({ col, contract: r.contract.id, co: l.co, src: '個別（アプリの計算値）', amt: l.amt, basis: l.basis });
     }
   }
   for (const j of gen.journals) {
     for (const l of j.lines) {
       const row = get(l);
-      if (j.kind === 'IND') row.ind += l.amt;
-      else row.con += l.amt;
+      const col = j.kind === 'IND' ? 'ind' : 'con';
+      row[col] += l.amt;
+      row.items.push({ col, contract: j.contractId, co: l.co, src: `${j.tpl} ${j.title}`, amt: l.amt, basis: (l.bases || [])[0] || '' });
     }
   }
   const out = [...rows.values()].map((r) => ({ ...r, simple: r.lessee + r.lessor, consol: r.lessee + r.lessor + r.ind + r.con }));
