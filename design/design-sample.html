@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>デザイン見本（ビジネストラスト）</title>
+  <link rel="icon" href="bt-logo.png">
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .swatch { display: inline-flex; flex-direction: column; width: 150px; margin: 0 8px 8px 0; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; font-size: 12px; background: #fff; }
+    .swatch i { height: 44px; display: block; }
+    .swatch span { padding: 6px 8px; }
+  </style>
+</head>
+<body>
+  <!-- ヘッダー：白地にロゴ＋アプリ名、下に紺→青→水色の線 -->
+  <header class="app-header">
+    <a class="brand" href="#"><img src="bt-logo.png" alt="BUSINESS TRUST" class="brand-logo"><span class="brand-name">○○注記ツール</span></a>
+    <div class="who">入力者 <input placeholder="名前"></div>
+  </header>
+  <div class="layout">
+    <!-- 左のツリー：最上部でモード（単体／連結）を切り替え、番号つきの手順。子の項目は線と点で -->
+    <nav class="sidebar">
+      <div class="nav-mode" style="grid-template-columns:1fr 1fr"><button class="on">単体（会社別）</button><button>連結</button></div>
+      <div class="nav-co-wrap"><div class="small muted">会社</div><select class="nav-co"><option>P00 サンプル親会社</option></select></div>
+      <ol class="nav-tree">
+        <li class="nav-step"><a class="nav-head"><span class="nav-no">1</span><span class="nav-label">資料の取込み</span><span class="nav-st ok">✓</span></a></li>
+        <li class="nav-step on"><a class="nav-head"><span class="nav-no">2</span><span class="nav-label">明細</span><span class="nav-st warn">2</span></a>
+          <ul class="nav-sub"><li><a><span class="nav-dot"></span>A銀行（長期借入金）</a></li><li><a><span class="nav-dot"></span>B銀行（短期借入金）</a></li></ul></li>
+        <li class="nav-step"><a class="nav-head"><span class="nav-no">3</span><span class="nav-label">計算結果</span><span class="nav-st todo">・</span></a></li>
+      </ol>
+      <div class="nav-common"><a>設定（マスタ・会社）</a><a>変更履歴</a></div>
+    </nav>
+
+    <main>
+      <div class="page-head"><div><div class="crumb">単体（会社別の入力）</div><h1>P00 サンプル親会社 <span class="badge">親会社</span></h1></div>
+        <div class="tools"><div class="seg"><button class="on">当期</button><button>前期</button></div></div></div>
+      <h2 class="step-title"><span class="nav-no">2</span>明細</h2>
+
+      <h2>色（ロゴの4色＋濃い紺）</h2>
+      <div>
+        <span class="swatch"><i style="background:var(--navy)"></i><span>--navy #14254A<br>濃い紺・見出しの文字</span></span>
+        <span class="swatch"><i style="background:var(--navy-2)"></i><span>--navy-2 #192F5B<br>ボタン・リンク</span></span>
+        <span class="swatch"><i style="background:var(--corporate)"></i><span>--corporate #2D56A4<br>ロゴの青・見出しの印</span></span>
+        <span class="swatch"><i style="background:var(--cyan)"></i><span>--cyan #00A8EA<br>ロゴの水色・選択中</span></span>
+        <span class="swatch"><i style="background:var(--red)"></i><span>--red #B72024<br>ロゴの赤・注意</span></span>
+        <span class="swatch"><i style="background:var(--green)"></i><span>--green #00754E<br>ロゴの緑・入力済み</span></span>
+        <span class="swatch"><i style="background:var(--hl-strong)"></i><span>--hl-strong #FFD84D<br>参照箇所のハイライト</span></span>
+      </div>
+
+      <h2>ボタン・切替え・バッジ</h2>
+      <div class="row">
+        <button class="btn btn-primary">保存して再計算</button><button class="btn">変更を破棄</button><button class="btn btn-danger">すべて消す</button>
+        <button class="btn btn-sm">表をコピー</button>
+        <span class="badge">親会社</span><span class="badge ok">確認済</span><span class="badge warn">確認事項 1</span><span class="badge cls">分類2</span>
+        <span class="src">PDF p.2</span><span class="src journal">仕訳 12行</span><span class="src manual">手入力</span><span class="src carry">繰越</span>
+      </div>
+
+      <h2>お知らせ</h2>
+      <div class="alert alert-info">説明・使い方（淡い青）</div>
+      <div class="alert alert-warn"><b>確認事項（1件）</b>：明細の合計と試算表の残高が 1,000,000円 違います</div>
+      <div class="alert alert-ok">確認事項はありません</div>
+      <div class="alert alert-err">エラー：上書きの理由を入れてください</div>
+
+      <h2>表（金額は右寄せ・桁区切り・マイナスは△）</h2>
+      <table class="tbl note-tbl">
+        <thead><tr><th></th><th>前連結会計年度</th><th>当連結会計年度</th></tr></thead>
+        <tbody>
+          <tr class="sec"><th colspan="3">繰延税金資産</th></tr>
+          <tr><td class="indent">賞与引当金</td><td class="num vcell">54,462</td><td class="num vcell hl-main">59,793</td></tr>
+          <tr><td class="indent">未払事業税</td><td class="num vcell hl">12,393</td><td class="num vcell">13,253</td></tr>
+          <tr><td class="indent">評価性引当額</td><td class="num">△36,515</td><td class="num">△31,859</td></tr>
+          <tr class="total"><td>繰延税金資産合計</td><td class="num">249,472</td><td class="num">281,066</td></tr>
+          <tr class="excluded"><td class="indent">対象外の行（灰色）</td><td class="num">0</td><td class="num">0</td></tr>
+        </tbody>
+      </table>
+      <p class="small muted">押せる数値（.vcell）にマウスを置くと淡い青。参照している箇所は黄色（.hl）、いま開いている値は濃い黄色に枠（.hl-main）。</p>
+
+      <h2>入力欄</h2>
+      <div class="form-grid"><div>税引前当期純利益</div><div class="row"><input type="text" value="944,000,000" style="text-align:right;width:180px"><span class="src">PDF p.1</span></div>
+        <div>区分</div><select><option>自動判定に従う</option></select></div>
+
+      <h2>カード・数値の見出し</h2>
+      <div class="kpi"><div class="k"><span>会社</span><b>4社</b></div><div class="k"><span>確認事項</span><b class="red">2件</b></div></div>
+
+      <div class="save-bar"><button class="btn btn-primary">保存して再計算</button><button class="btn">変更を破棄</button><a class="btn">次へ：計算結果 →</a><span class="muted">保存済み</span></div>
+    </main>
+
+    <!-- 右の「計算の確認」欄 -->
+    <aside class="panel open">
+      <div class="panel-head"><b>計算の確認</b><span class="spacer"></span><button class="btn btn-sm">← 戻る</button><button class="btn btn-sm">×</button></div>
+      <div class="small muted">連結・当期</div>
+      <div style="font-weight:700">住民税均等割（率）</div>
+      <div class="val">0.47%</div>
+      <div class="card soft" style="margin:6px 0"><div class="small sub">率の計算</div>
+        <div style="line-height:2"><span class="chip">住民税均等割：4,690,000円</span> × 100%（税額差異のため）÷ <span class="chip">税金等調整前当期純利益：990,600,000円</span> ＝ <b>0.47%</b></div></div>
+      <h3>会社別の内訳（3社）</h3>
+      <table class="tbl drill-tbl"><thead><tr><th>会社</th><th>金額</th><th>構成比</th></tr></thead>
+        <tbody><tr><td><span class="badge" style="font-size:10px;padding:0 4px">P00</span> 親会社</td><td class="num">3,800,000円</td><td class="num">81.0%</td></tr>
+          <tr class="total"><td>合計</td><td class="num">4,690,000円</td><td class="num">100.0%</td></tr></tbody></table>
+      <h3>計算過程のドリルダウン</h3>
+      <table class="tbl drill-tbl"><thead><tr><th>項目</th><th>値</th><th>値を入れた式</th></tr></thead>
+        <tbody><tr><td><span class="drill-tog">▼</span> 住民税均等割</td><td class="num">4,690,000円</td><td class="small muted">＝ 3,800,000円 ＋ 530,000円 ＋ 360,000円</td></tr>
+          <tr><td style="padding-left:18px"><span class="drill-tog">■</span> 横浜市長 均等割額（第二十号様式）<span class="src">PDF p.7</span></td><td class="num">130,000円</td><td></td></tr></tbody></table>
+    </aside>
+  </div>
+</body>
+</html>
