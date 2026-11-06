@@ -85,13 +85,61 @@ export function select(options, value, onChange) {
   return h('select', { on: { change: (e) => onChange(e.target.value) } }, options.map(([v, l]) => h('option', { value: v, selected: String(v) === String(value) }, l)));
 }
 
+/**
+ * 画面内の確認ダイアログ（ブラウザの confirm/prompt が使えない環境でも動作する）。
+ * @returns {Promise<true|string|null>} 実行＝true（入力ありの場合は入力文字列）、キャンセル＝null
+ */
+export function ask({ title, message = '', okLabel = '実行する', danger = false, input = null }) {
+  return new Promise((resolve) => {
+    const prev = document.activeElement;
+    const ta = input ? h('textarea', { id: 'ask-input', rows: 3, maxlength: 300, placeholder: input, 'aria-label': input }) : null;
+    const err = h('div', { class: 'ask-err', hidden: true }, '入力してください');
+    let overlay;
+    const close = (v) => { overlay.remove(); if (prev && prev.focus) prev.focus(); resolve(v); };
+    const ok = h('button', { class: `btn ${danger ? 'danger-solid' : 'primary'}`, type: 'button', on: { click: () => {
+      if (ta && !ta.value.trim()) { err.hidden = false; ta.focus(); return; }
+      close(ta ? ta.value.trim() : true);
+    } } }, okLabel);
+    const cancel = h('button', { class: 'btn', type: 'button', on: { click: () => close(null) } }, 'キャンセル');
+    const box = h('div', { class: 'ask', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'ask-title' },
+      h('h2', { id: 'ask-title' }, title), message ? h('p', { class: 'ask-msg' }, message) : null, ta, err, h('div', { class: 'actions' }, cancel, ok));
+    overlay = h('div', { class: 'overlay', on: { keydown: (e) => { if (e.key === 'Escape') close(null); }, click: (e) => { if (e.target === overlay) close(null); } } }, box);
+    document.body.appendChild(overlay);
+    (ta || ok).focus();
+  });
+}
+
+/**
+ * 書き出し：内容を画面に表示し、コピーまたはファイル保存を選べるようにする
+ * （claude.ai 上の公開ページなど、ダウンロードが禁止された環境ではコピーを使う）。
+ */
 export function download(filename, content, type) {
-  const blob = new Blob([content], { type });
-  const url = URL.createObjectURL(blob);
-  const a = h('a', { href: url, download: filename });
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
+  const prev = document.activeElement;
+  const ta = h('textarea', { id: 'export-text', rows: 12, readonly: true, 'aria-label': filename, value: content.replace(/^\uFEFF/, '') });
+  const note = h('div', { class: 'help' }, 'ファイルとして保存できない環境では「コピー」して、表計算ソフトやテキストエディタに貼り付けてください。');
+  let overlay;
+  const close = () => { overlay.remove(); if (prev && prev.focus) prev.focus(); };
+  const copy = h('button', { class: 'btn primary', type: 'button', on: { click: () => {
+    const done = () => toast('コピーしました');
+    try {
+      navigator.clipboard.writeText(ta.value).then(done, () => { ta.select(); toast('自動でコピーできないため、選択された文字を Ctrl+C（⌘C）でコピーしてください', 'error'); });
+    } catch { ta.select(); toast('選択された文字を Ctrl+C（⌘C）でコピーしてください', 'error'); }
+  } } }, 'コピー');
+  const save = h('button', { class: 'btn', type: 'button', on: { click: () => {
+    try {
+      const url = URL.createObjectURL(new Blob([content], { type }));
+      const a = h('a', { href: url, download: filename });
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
+    } catch { toast('この環境ではファイルとして保存できません。コピーしてください', 'error'); }
+  } } }, 'ファイルとして保存');
+  const box = h('div', { class: 'ask wide', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'export-title' },
+    h('h2', { id: 'export-title' }, `書き出し：${filename}`), note, ta,
+    h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', on: { click: close } }, '閉じる'), save, copy));
+  overlay = h('div', { class: 'overlay', on: { keydown: (e) => { if (e.key === 'Escape') close(); } } }, box);
+  document.body.appendChild(overlay);
+  copy.focus();
 }
 
 export function toast(msg, kind = 'info') {

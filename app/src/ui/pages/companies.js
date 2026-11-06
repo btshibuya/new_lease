@@ -1,4 +1,4 @@
-import { h, card, toast } from '../dom.js';
+import { h, card, toast, ask } from '../dom.js';
 import { update } from '../store.js';
 import { sanitizeCompany, validCode } from '../../engine/data.js';
 import { deepClone } from '../../engine/util.js';
@@ -27,7 +27,7 @@ export function renderCompanies(ctx) {
       [['cumulative', '累積的影響方式'], ['retrospective', '完全遡及'], ['applied', '適用済み（IFRS・US GAAP等）']].map(([v, l]) => h('option', { value: v, selected: (c.adoption?.method || 'cumulative') === v }, l))),
       h('input', { type: 'month', value: c.adoption?.ym || '2027-04', 'aria-label': '適用開始年月', on: { input: (e) => { c.adoption = { ...(c.adoption || {}), ym: e.target.value }; } } })),
     h('td', null, used.has(c.code) ? h('span', { class: 'muted' }, '使用中') : h('button', { class: 'btn-link danger', type: 'button', on: { click: () => update((d) => { d.companies = d.companies.filter((x) => x.code !== c.code); }, '会社削除', c.code) } }, '削除'))));
-  const save = () => {
+  const save = async () => {
     const clean = draft.map(sanitizeCompany);
     const codes = clean.map((c) => c.code);
     if (codes.some((c) => !validCode(c))) return toast('会社コードは英数字・_・- の1〜20文字で入力してください（予約語は不可）', 'error');
@@ -37,7 +37,7 @@ export function renderCompanies(ctx) {
     if (missing.length) return toast(`契約で使用中の会社コードは変更できません：${missing.join('、')}`, 'error');
     // 使用中の会社の基準税率・持分比率を変えると、履歴のない過去期間も遡って変わる
     const changed = clean.filter((c) => { const o = data.companies.find((x) => x.code === c.code); return o && used.has(c.code) && (o.taxRate !== c.taxRate || o.nciRatio !== c.nciRatio); });
-    if (changed.length && !confirm(`${changed.map((c) => c.code).join('、')} の基準税率・持分比率を変更すると、履歴のない過去の期間も遡って再計算されます（確定済み期間は CHK-13 が NG になります）。\n税率改正や持分の変動であれば、下の「履歴」に適用開始年月つきで追加してください。\n\nこのまま基準値を変更しますか？`)) return;
+    if (changed.length && !(await ask({ title: '基準税率・持分比率を変更しますか？', message: `${changed.map((c) => c.code).join('、')} の基準値を変更すると、履歴のない過去の期間も遡って再計算されます（確定済み期間は CHK-13 が NG になります）。\n税率改正や持分の変動であれば、下の「履歴」に適用開始年月つきで追加してください。`, okLabel: '基準値を変更する', danger: true }))) return;
     update((d) => { d.companies = clean; }, '会社マスタ更新', `${clean.length}社`);
     toast('保存しました');
   };

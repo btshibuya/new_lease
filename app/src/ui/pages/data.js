@@ -1,4 +1,4 @@
-import { h, card, table, download, toast, statusBadge } from '../dom.js';
+import { h, card, table, download, toast, statusBadge, ask } from '../dom.js';
 import { state, exportJson, replaceData, resetSample, update, backups, readBackup } from '../store.js';
 import { sanitizeData, verifyChain, appendLog } from '../../engine/data.js';
 import { sanitizePolicies } from '../../engine/policies.js';
@@ -18,7 +18,7 @@ export function renderData(ctx) {
       const raw = JSON.parse(await f.text());
       const body = raw && raw.format === 'newlease-consolidation' ? raw : { data: raw };
       const { data: clean, warnings } = sanitizeData(body.data);
-      if (!confirm(`会社 ${clean.companies.length} 社・契約 ${clean.contracts.length} 件を読み込み、現在のデータを置き換えます。よろしいですか？${warnings.length ? `\n\n注意：\n${warnings.slice(0, 5).join('\n')}` : ''}`)) return;
+      if (!(await ask({ title: `会社 ${clean.companies.length} 社・契約 ${clean.contracts.length} 件を読み込みますか？`, message: `現在のデータを置き換えます（監査ログは残ります）。${warnings.length ? `\n\n読込時の自動修正：\n${warnings.slice(0, 5).join('\n')}` : ''}`, okLabel: '読み込む' }))) return;
       if (body.policies) {
         const np = sanitizePolicies(body.policies);
         const diff = Object.keys(np).filter((k) => np[k] !== state.policies[k]).map((k) => `${k}:${state.policies[k]}→${np[k]}`);
@@ -41,7 +41,7 @@ export function renderData(ctx) {
       h('div', { class: 'actions' },
         h('button', { class: 'btn primary', type: 'button', on: { click: () => download(`newlease_${new Date().toISOString().slice(0, 10)}.json`, exportJson(), 'application/json') } }, 'JSONで書き出す'),
         h('label', { class: 'btn' }, 'JSONを読み込む', file),
-        h('button', { class: 'btn danger', type: 'button', on: { click: () => { if (confirm('現在のデータをサンプルデータに置き換えますか？（監査ログは残ります）')) resetSample(); } } }, 'サンプルデータに戻す'))),
+        h('button', { class: 'btn danger', type: 'button', on: { click: async () => { if (await ask({ title: 'サンプルデータに戻しますか？', message: '現在の会社・契約・手入力仕訳・確定情報をサンプルデータに置き換えます（監査ログは残ります）。必要なら先に書き出してください。', okLabel: 'サンプルに戻す', danger: true })) resetSample(); } } }, 'サンプルデータに戻す'))),
     backups().length ? card('退避されたデータ',
       h('p', { class: 'help' }, '読込に失敗した保存データを退避しています。書き出して内容を確認してください。'),
       h('ul', null, backups().map((k) => h('li', null, k, ' ', h('button', { class: 'btn-link', type: 'button', on: { click: () => download(`${k}.json`, readBackup(k) || '', 'application/json') } }, '書き出す'))))) : null,

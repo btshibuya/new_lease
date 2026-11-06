@@ -1,4 +1,4 @@
-import { h, card, select, download, toast } from '../dom.js';
+import { h, card, select, download, toast, ask } from '../dom.js';
 import { journalCard, kpi, emptyState } from '../components.js';
 import { update } from '../store.js';
 import { TEMPLATES } from '../../engine/elimination.js';
@@ -88,10 +88,10 @@ function manualCard(ctx) {
   const existing = (data.manualJournals || []).filter((m) => m.periodStart >= indexToYm(period.start) && m.periodEnd <= indexToYm(period.end));
   return card('手入力仕訳（理由必須・監査ログに記録）',
     h('p', { class: 'help' }, '自動作成の対象外の調整（棚卸資産に含まれる償却費、変動リース料・非リース構成部分、決算日差異の調整など）を入力します。選択中の期間に計上され、精算表・期間確定の対象になります。年度の表示には、その年度内の四半期に入力した仕訳も含まれます。手入力仕訳には税効果・非支配株主持分の按分は自動計算されないため、必要なら別の行で入力してください。'),
-    existing.length ? h('ul', null, existing.map((m) => h('li', null, `${m.title}（${m.reason}）`, ' ', h('button', { class: 'btn-link danger', type: 'button', on: { click: () => {
-      const why = prompt('削除する理由を入力してください（監査ログに記録されます）');
-      if (!why || !why.trim()) return;
-      update((d) => { d.manualJournals = d.manualJournals.filter((x) => x.id !== m.id); }, '手入力仕訳削除', `${m.title}：${why.trim().slice(0, 200)}`);
+    existing.length ? h('ul', null, existing.map((m) => h('li', null, `${m.title}（${m.reason}）`, ' ', h('button', { class: 'btn-link danger', type: 'button', on: { click: async () => {
+      const why = await ask({ title: `手入力仕訳「${m.title}」を削除しますか？`, message: '削除の理由は監査ログに記録されます。', input: '削除の理由（必須）', okLabel: '削除する', danger: true });
+      if (!why) return;
+      update((d) => { d.manualJournals = d.manualJournals.filter((x) => x.id !== m.id); }, '手入力仕訳削除', `${m.title}：${why.slice(0, 200)}`);
     } } }, '削除')))) : null,
     h('details', null, h('summary', null, '手入力仕訳を追加する'),
       h('div', { class: 'form-grid' },

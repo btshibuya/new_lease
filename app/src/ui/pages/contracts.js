@@ -1,4 +1,4 @@
-import { h, card, table, field, select, statusBadge, toast, amt } from '../dom.js';
+import { h, card, table, field, select, statusBadge, toast, amt, ask } from '../dom.js';
 import { COLORS, emptyState } from '../components.js';
 import { gantt, barChart, lineChart } from '../charts.js';
 import { state, update, setUi } from '../store.js';
@@ -35,7 +35,7 @@ export function renderContracts(ctx) {
   const tl = rows.length ? gantt({ title: '契約タイムライン', subtitle: '帯：リース期間、✕：中途解約、網掛け：選択中の期間。行をクリックすると詳細を表示', rows, wide: true, min: minI, max: maxI, highlight: { start: period.start, end: period.end } }) : emptyState('契約がありません');
 
   const list = table([
-    { label: '契約番号', render: (c) => h('td', null, h('a', { href: '#/contracts', on: { click: (e) => { e.preventDefault(); setUi({ contractId: c.id }); } } }, c.id)) },
+    { label: '契約番号', render: (c) => h('td', null, h('a', { href: '#contracts', on: { click: (e) => { e.preventDefault(); setUi({ contractId: c.id }); } } }, c.id)) },
     { label: '契約名', key: 'name' },
     { label: '貸手 → 借手', render: (c) => `${co(c.lessorCo)} → ${co(c.lesseeCo)}` },
     { label: '借手の会計モデル', render: (c) => MODEL[c.lessee.model] },
@@ -229,7 +229,7 @@ function editor(c, data) {
         update((d) => d.contracts.push(copy), '契約複製', `${c.id}→${copy.id}`);
         setUi({ contractId: copy.id });
       } } }, '複製'),
-      h('button', { class: 'btn danger', type: 'button', on: { click: () => { if (confirm(`契約 ${c.id} を削除しますか？`)) { update((d) => { d.contracts = d.contracts.filter((x) => x.id !== c.id); }, '契約削除', c.id); setUi({ contractId: null }); } } } }, '削除')));
+      h('button', { class: 'btn danger', type: 'button', on: { click: async () => { if (await ask({ title: `契約 ${c.id} を削除しますか？`, message: `${c.name}`, okLabel: '削除する', danger: true })) { update((d) => { d.contracts = d.contracts.filter((x) => x.id !== c.id); }, '契約削除', c.id); setUi({ contractId: null }); } } } }, '削除')));
   const lockNote = (data.locks || []).length ? h('div', { class: 'alert' }, `確定済みの期間が ${(data.locks || []).length} 件あります。確定済み期間の数値が変わる変更をすると、検算 CHK-13 が NG になります。条件変更は変更日以降の期間に反映されるよう入力してください。`) : null;
   return card('契約の編集', lockNote, form);
 }

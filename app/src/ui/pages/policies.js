@@ -1,4 +1,4 @@
-import { h, card, table, statusBadge, toast } from '../dom.js';
+import { h, card, table, statusBadge, toast, ask } from '../dom.js';
 import { journalCard, COLORS } from '../components.js';
 import { barChart } from '../charts.js';
 import { state, update } from '../store.js';
@@ -212,7 +212,7 @@ function policyCard(def, ctx) {
 export function renderPolicies(ctx) {
   const pol = state.policies;
   const summary = table([
-    { label: 'No.', render: (d) => h('td', null, h('a', { href: '#/policies', on: { click: (e) => { e.preventDefault(); document.getElementById(d.id)?.scrollIntoView({ behavior: 'smooth' }); } } }, d.id)) },
+    { label: 'No.', render: (d) => h('td', null, h('a', { href: '#policies', on: { click: (e) => { e.preventDefault(); document.getElementById(d.id)?.scrollIntoView({ behavior: 'smooth' }); } } }, d.id)) },
     { label: '区分', key: 'category' },
     { label: '論点', key: 'title' },
     { label: '現在の選択', render: (d) => d.options.find((o) => o.value === pol[d.id])?.label },
@@ -225,8 +225,8 @@ export function renderPolicies(ctx) {
       h('p', null, '要件定義書 第11章の「監査法人等と協議すべき論点」について、基準・適用指針・実務対応報告や公表解説をもとに最も適切と考えられる処理を既定値にしています。選択を変えると、すべての仕訳・精算表・検算に直ちに反映されます。各論点では、現在のデータでの影響額の比較と、設例（仕訳例・グラフ）を確認できます。'),
       h('p', { class: 'help' }, '「推奨（既定値）」は会計上の判断にもとづく推奨、「既定値（自社方針に合わせて選択）」は自社の既存方針・借手の計算方法に合わせて選ぶ論点の初期値です。「要原文確認」の参照は、条番号等を基準の原文で確認する必要があるものです。最終的な方針は会計監査人と協議のうえ決定し、協議メモに記録してください（変更履歴は監査ログに残ります）。'),
       summary,
-      h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', on: { click: () => {
-        if (!confirm('すべての会計方針を既定値に戻しますか？')) return;
+      h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', on: { click: async () => {
+        if (!(await ask({ title: 'すべての会計方針を既定値に戻しますか？', message: '変更内容は監査ログに記録されます。', okLabel: '既定値に戻す' }))) return;
         update((_, p) => Object.assign(p, defaultPolicies()), '会計方針変更', 'すべて既定値に戻しました');
       } } }, 'すべて既定値に戻す'))),
     ...POLICIES.map((d) => policyCard(d, ctx)));

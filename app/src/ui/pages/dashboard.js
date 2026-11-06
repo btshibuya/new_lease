@@ -24,7 +24,7 @@ export function renderDashboard(ctx) {
     kpi('期末に消去する使用権資産（簿価）', fmt(rou), '取得原価−減価償却累計額', { accent: 'lessee' }),
     kpi('当期の連結損益への影響（税引前）', fmt(plPre), '＋は消去により連結利益が増加', { accent: 'diff' }),
     kpi('法人税等調整額 ／ 非支配株主に帰属する利益', `${fmt(tax)} ／ ${fmt(nci)}`, '当期の連結修正による増減（＋は費用・帰属額の増加）'),
-    kpi('検算', h('span', null, ngs ? statusBadge('ng', `NG ${ngs}件`) : warns ? statusBadge('warn', `警告 ${warns}件`) : statusBadge('ok', 'すべてOK')), h('a', { href: '#/checks' }, '検算の詳細へ')));
+    kpi('検算', h('span', null, ngs ? statusBadge('ng', `NG ${ngs}件`) : warns ? statusBadge('warn', `警告 ${warns}件`) : statusBadge('ok', 'すべてOK')), h('a', { href: '#checks' }, '検算の詳細へ')));
 
   // 相関図
   const involved = new Set(data.contracts.flatMap((c) => [c.lessorCo, c.lesseeCo]));
@@ -61,7 +61,7 @@ export function renderDashboard(ctx) {
 
   const chk = card('検算サマリー', table([
     { label: '状態', render: (c) => h('td', null, statusBadge(c.status)) },
-    { label: '検算項目', render: (c) => h('td', null, h('a', { href: `#/checks` }, `${c.id} ${c.title}`)) },
+    { label: '検算項目', render: (c) => h('td', null, h('a', { href: `#checks` }, `${c.id} ${c.title}`)) },
     { label: '結果', key: 'detail' },
   ], checks));
 

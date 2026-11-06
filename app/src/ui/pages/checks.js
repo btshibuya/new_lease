@@ -1,4 +1,4 @@
-import { h, card, statusBadge, table, toast } from '../dom.js';
+import { h, card, statusBadge, table, toast, ask } from '../dom.js';
 import { kpi } from '../components.js';
 import { state, update, lockPeriod, unlockPeriod, isLocked } from '../store.js';
 import { snapshotNets } from '../../engine/checks.js';
@@ -11,15 +11,15 @@ export function renderChecks(ctx) {
     h('p', { class: 'help' }, '確定すると、この期間の仕訳（契約別・科目別の金額）をスナップショットとして保存します。以後、契約・会社マスタ・会計方針を変更して確定済み期間の数値が変わると、検算 CHK-13 が NG になります（過去の連結財務諸表との不一致を防ぐため）。NG が残る期間は確定できません。'),
     locked
       ? h('div', { class: 'actions' }, statusBadge('ok', `${period.label} は確定済み`),
-        h('button', { class: 'btn danger', type: 'button', on: { click: () => {
-          const reason = prompt('確定を解除する理由を入力してください（監査ログに記録されます）');
-          if (!reason || !reason.trim()) return toast('理由が未入力のため解除しませんでした', 'error');
-          unlockPeriod(period, reason.trim().slice(0, 300));
+        h('button', { class: 'btn danger', type: 'button', on: { click: async () => {
+          const reason = await ask({ title: `${period.label} の確定を解除しますか？`, message: '解除の理由は監査ログに記録されます。', input: '解除の理由（必須）', okLabel: '確定を解除する', danger: true });
+          if (!reason) return;
+          unlockPeriod(period, reason.slice(0, 300));
           toast('確定を解除しました');
         } } }, '確定を解除する'))
       : h('div', { class: 'actions' },
-        h('button', { class: 'btn primary', type: 'button', disabled: status === 'ng', title: status === 'ng' ? 'NG の検算があるため確定できません' : '', on: { click: () => {
-          if (!confirm(`${period.label} を確定しますか？`)) return;
+        h('button', { class: 'btn primary', type: 'button', disabled: status === 'ng', title: status === 'ng' ? 'NG の検算があるため確定できません' : '', on: { click: async () => {
+          if (!(await ask({ title: `${period.label} を確定しますか？`, message: 'この期間の仕訳をスナップショットとして保存します。以後、確定済み期間の数値が変わる変更をすると検算 CHK-13 が NG になります。', okLabel: '確定する' }))) return;
           lockPeriod(period, snapshotNets(gen, state.policies, names), state.policies);
           toast(`${period.label} を確定しました`);
         } } }, `${period.label} を確定する`),

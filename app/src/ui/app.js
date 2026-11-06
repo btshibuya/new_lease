@@ -69,7 +69,8 @@ export function compute() {
 }
 
 function currentPage() {
-  const id = (location.hash || '#/dashboard').replace(/^#\//, '').split('?')[0];
+  // 「#dashboard」形式（旧形式「#/dashboard」も受け付ける）
+  const id = (location.hash || '#dashboard').replace(/^#\/?/, '').split('?')[0];
   return PAGES.find((p) => p.id === id) || PAGES[0];
 }
 
@@ -81,20 +82,20 @@ function render() {
     ctx = compute();
   } catch (e) {
     // 計算できなくてもメニューとデータ管理は使えるようにする（データの書き出し・修正のため）
-    const navE = h('nav', { class: 'nav', 'aria-label': '画面' }, PAGES.map((p) => h('a', { href: `#/${p.id}` }, p.label)));
+    const navE = h('nav', { class: 'nav', 'aria-label': '画面' }, PAGES.map((p) => h('a', { href: `#${p.id}` }, p.label)));
     const body = h('main', { class: 'main' }, h('div', { class: 'error' }, `計算中にエラーが発生しました：${e.message}。「データ管理」でデータを書き出すか、サンプルデータに戻してください。`));
     if (page.id === 'data') { try { body.append(renderData({ data: state.data })); } catch (e2) { body.append(h('div', { class: 'error' }, e2.message)); } }
     clear(root).append(navE, body);
     console.error(e);
     return;
   }
-  const nav = h('nav', { class: 'nav', 'aria-label': '画面' }, PAGES.map((p) => h('a', { href: `#/${p.id}`, class: p.id === page.id ? 'active' : '', 'aria-current': p.id === page.id ? 'page' : null }, p.label)));
+  const nav = h('nav', { class: 'nav', 'aria-label': '画面' }, PAGES.map((p) => h('a', { href: `#${p.id}`, class: p.id === page.id ? 'active' : '', 'aria-current': p.id === page.id ? 'page' : null }, p.label)));
   const periodSel = h('div', { class: 'period' },
     h('label', null, '期間 ',
       select([['year', '年度'], ['quarter', '四半期']], state.ui.granularity, (v) => setUi({ granularity: v, periodIndex: null }))),
     select(ctx.periods.map((p, i) => [i, p.label]), ctx.periodIndex, (v) => setUi({ periodIndex: Number(v) })),
     h('span', { class: 'unit' }, `金額単位：${ctx.unit}`),
-    h('a', { href: '#/checks', class: `status-pill st-${ctx.status}` }, ctx.status === 'ok' ? '✓ 検算OK' : ctx.status === 'warn' ? '! 検算：警告あり' : '✕ 検算：NGあり'),
+    h('a', { href: '#checks', class: `status-pill st-${ctx.status}` }, ctx.status === 'ok' ? '✓ 検算OK' : ctx.status === 'warn' ? '! 検算：警告あり' : '✕ 検算：NGあり'),
     h('button', { class: 'btn-link', type: 'button', title: '表示テーマの切替', on: { click: () => {
       const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
       const next = cur === 'dark' ? 'light' : 'dark';
