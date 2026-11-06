@@ -57,6 +57,7 @@ function toBool(v, errs, label) {
 }
 
 const MODEL = { jgaap: ['日本基準', '日本基準（IFRS第16号も同じ）', 'IFRS'], asc842ol: ['ASC842', 'ASC842オペ', 'ASC第842号'], offbalance: ['短期・少額', '短期少額', 'オフバランス'] };
+const OFFK = { short: ['短期リース', '短期'], low: ['少額リース', '少額'] };
 const TIMING = { arrears: ['後払'], advance: ['前払'] };
 const DEPT = Object.fromEntries(Object.entries(LESSEE_DEPT).map(([k, v]) => [k, [k === 'sga' ? '販管費' : '製造原価', v]]));
 const ASSET = Object.fromEntries(Object.entries(ASSET_CLASSES).map(([k, v]) => [k, [v]]));
@@ -93,6 +94,7 @@ export const CONTRACT_COLUMNS = [
   { label: '中途解約年月', help: '任意。例：2029-03', get: (c) => c.terminationYm || '', set: (o, v, e, l) => { o.terminationYm = toYm(v, e, l); } },
   { label: '解約違約金', help: '任意（借手→貸手）', get: (c) => c.terminationPenalty || '', set: (o, v, e, l) => { o.terminationPenalty = toNum(v, e, l) ?? 0; } },
   { label: '借手：会計モデル', help: '日本基準／ASC842／短期・少額', get: (c) => first(MODEL, c.lessee.model), set: (o, v, e, l) => { o.lessee.model = toChoice(v, MODEL, e, l) ?? 'jgaap'; } },
+  { label: '借手：簡便的な取扱いの種類', help: '短期リース／少額リース（会計モデルが短期・少額の場合）', get: (c) => first(OFFK, c.lessee.offKind || 'short'), set: (o, v, e, l) => { o.lessee.offKind = toChoice(v, OFFK, e, l) ?? 'short'; } },
   { label: '借手：割引率（年％）', help: '例：2.5（＝2.5％）', get: (c) => +(c.lessee.rate * 100).toFixed(6), set: (o, v, e, l) => { o.lessee.rate = toPct(v, e, l) ?? 0; } },
   { label: '借手：初期直接費用', help: '任意。グループ外への支出', get: (c) => c.lessee.idc || '', set: (o, v, e, l) => { o.lessee.idc = toNum(v, e, l) ?? 0; } },
   { label: '借手：使用部門', help: '販管費／製造原価', get: (c) => first(DEPT, c.lessee.dept), set: (o, v, e, l) => { o.lessee.dept = toChoice(v, DEPT, e, l) ?? 'sga'; } },

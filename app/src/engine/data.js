@@ -29,6 +29,7 @@ function ym(v) {
   return /^\d{4}-(0[1-9]|1[0-2])$/.test(s) ? s : null;
 }
 
+import { sanitizeNoteInputs } from './notes.js';
 import { RESERVED_IDS } from './schedule.js';
 
 const CODE_RE = /^[^\u0000-\u001f\u007f|]{1,20}$/;
@@ -117,6 +118,7 @@ export function sanitizeContract(c) {
     })) : [],
     lessee: {
       model: oneOf(l.model, ['jgaap', 'asc842ol', 'offbalance'], 'jgaap'),
+      offKind: oneOf(l.offKind, ['short', 'low'], 'short'), // 簡便的な取扱いの種類（短期リース／少額リース）。注記の「短期リースに係る費用」に使う
       rate: num(l.rate, 0, { min: 0, max: 0.99 }),
       idc: num(l.idc, 0, { min: 0 }),
       dept: oneOf(l.dept, ['sga', 'mfg'], 'sga'),
@@ -220,6 +222,7 @@ export function sanitizeData(raw) {
       manualJournals,
       locks,
       checkNotes,
+      noteInputs: sanitizeNoteInputs(raw.noteInputs),
       auditLog,
       auditAnchor,
       importedLogs,

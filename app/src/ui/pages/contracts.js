@@ -18,7 +18,7 @@ function blankContract(data) {
   const lessee = data.companies.find((c) => c.code !== lessor)?.code || '';
   let n = data.contracts.length + 1;
   while (data.contracts.some((c) => c.id === `K-${String(n).padStart(3, '0')}`)) n++;
-  return sanitizeContract({ id: `K-${String(n).padStart(3, '0')}`, name: '新規契約', lessorCo: lessor, lesseeCo: lessee, assetClass: 'building', commencement: '2027-04', termMonths: 60, frequencyMonths: 12, timing: 'arrears', payment: 1000, lessee: { model: 'jgaap', rate: 0.03, dept: 'sga' }, lessor: { assetId: '', assetCost: 0, ratio: 1 } });
+  return sanitizeContract({ id: `K-${String(n).padStart(3, '0')}`, name: '新規契約', lessorCo: lessor, lesseeCo: lessee, assetClass: 'building', commencement: '2027-04', termMonths: 60, frequencyMonths: 12, timing: 'arrears', payment: 1000, lessee: { model: 'jgaap', offKind: 'short', rate: 0.03, dept: 'sga' }, lessor: { assetId: '', assetCost: 0, ratio: 1 } });
 }
 
 export function renderContracts(ctx) {
@@ -284,6 +284,7 @@ function editor(c, data) {
       fC('解約違約金（借手→貸手）', num(f, 'terminationPenalty', { min: 0 }), '解約時の精算金。連結上は相殺消去'))),
     h('fieldset', null, h('legend', null, '借手の情報（個別でオンバランス済みの内容）'), grid(
       fL('借手の会計モデル', sel(f.lessee, 'model', Object.entries(MODEL))),
+      fL('簡便的な取扱いの種類（短期・少額リース等の場合）', sel(f.lessee, 'offKind', [['short', '短期リース（12か月以内）'], ['low', '少額リース']]), '注記「短期リースに係る費用」（適用指針第99項〜第101項）の集計に使います。少額リースの費用は含めません'),
       fL('割引率（年％）', pct(f.lessee, 'rate')),
       fL('初期直接費用', num(f.lessee, 'idc', { min: 0 }), 'グループ外への支出（使用権資産に含めた額）'),
       fL('使用部門', sel(f.lessee, 'dept', Object.entries(LESSEE_DEPT)), '貸手の減価償却費の組替先（POL-05）'),
