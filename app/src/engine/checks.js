@@ -2,7 +2,7 @@
 // 原則：仕訳の生成（elimination.js の「個別仕訳の取消」）とは別の計算経路で、期待値を独立に組み立てて比較する。
 // 各検算の「独立性」の程度は independence に明記する（自己一致にすぎない検算を独立検証と誤認させないため）。
 // 注意：すべての誤りを検出できるわけではない。検出できる誤りの例は tests/mutation.test.js を参照。
-import { generateAll } from './elimination.js';
+import { generateAll, overrideDiff, overrideSuggestions } from './elimination.js';
 import { worksheet, MUST_BE_ZERO, eFromSchedule, cashFlowEliminations } from './reports.js';
 import { validateContract, sortedMods, periodSummary } from './schedule.js';
 import { round, fmt, ymToIndex, indexToJp, indexToYm } from './util.js';
@@ -48,6 +48,8 @@ function paymentsFromTerms(c, ignoreTermination = false) {
     let amt = no <= (c.freePayments || 0) ? 0 : (steps.find((x) => no >= x.fromPayment)?.amount ?? c.payment);
     const mod = [...mods].reverse().find((x) => ymToIndex(x.ym) <= m && x.payment !== null && x.payment !== undefined);
     if (mod) amt = mod.payment;
+    const ov = (c.paymentOverrides || []).find((x) => ymToIndex(x.ym) === m); // 返済スケジュールの手修正
+    if (ov) amt = ov.amount;
     if (amt) out.set(m, amt);
   }
   return out;
@@ -164,8 +166,9 @@ function netOf(journals, tplSet, cid) {
   const m = new Map();
   for (const j of journals) {
     // 開始仕訳・洗替は元の内容（src）で判定する
-    if (!tplSet.has(j.src || j.tpl) || j.contractId !== cid) continue;
-    for (const l of j.lines) {
+    if (!tplSet.has(j.src || j.tpl) || j.contractId !== cid || j.carriedOverride) continue;
+    // 手修正した仕訳は修正前（アプリの計算値）で検算する（手修正は CHK-18 で別に警告）
+    for (const l of j.origLines || j.lines) {
       const acc = l.acc === 'LL_C' ? 'LL_NC' : l.acc;
       m.set(`${acc}|${l.co}`, (m.get(`${acc}|${l.co}`) || 0) + l.amt);
     }
@@ -271,12 +274,34 @@ export function runChecks(data, period, pol, gen, names = {}, opts = {}) {
     return item('CHK-03', '消去差額の恒等式（損益の累計＝残高の差＝仕訳の純資産修正額）とロールフォワード', ng.length ? NG : OK, ng.length ? `${ng.length}件の不一致` : '全契約で3つの計算経路が一致', idt, 'スケジュールの損益・残高と仕訳の比較');
   });
 
+  safe('CHK-18', '仕訳・返済スケジュールの手修正', () => {
+    const rows = [];
+    for (const j of gen.journals.filter((x) => x.override)) {
+      const diff = overrideDiff({ lines: j.lines, orig: j.origLines });
+      const sug = overrideSuggestions(diff).map((s) => s.label).slice(0, 4).join('、');
+      rows.push({ contract: j.contractId, message: `${j.tpl}${j.src ? `・${j.src}` : ''} ${j.title}：手修正（理由：${j.override.reason}）。差額 ${diff.map((d) => `${ACCOUNTS[d.acc]?.name || d.acc}（${d.co}）${fmt(d.amt)}`).join('、')}${j.override.stale ? '。手修正後に元の計算が変わりました。手修正を見直してください' : ''}${sug ? `。契約情報等の修正候補：${sug}` : ''}`, warn: true });
+    }
+    for (const j of gen.journals.filter((x) => x.carriedOverride)) rows.push({ contract: j.contractId, message: `${j.title}：前期以前の手修正の差額を開始仕訳で引き継いでいます`, warn: true });
+    for (const o of gen.overrideMissing || []) rows.push({ contract: o.contractId, message: `${o.tpl}${o.src ? `・${o.src}` : ''}：手修正の対象の仕訳がありません（契約・会計方針・繰越設定の変更で仕訳がなくなった可能性）。手修正を見直してください`, warn: true });
+    for (const c of data.contracts) for (const p of c.paymentOverrides || []) {
+      const m = ymToIndex(p.ym);
+      if (m >= period.start - 0 && m <= period.end) rows.push({ contract: c.id, message: `返済スケジュールの手修正：${p.ym} の支払額を ${fmt(p.amount)} に修正（理由：${p.reason || '—'}）`, warn: true });
+    }
+    return item('CHK-18', '仕訳・返済スケジュールの手修正', rows.length ? WARN : OK, rows.length ? `${rows.length}件の手修正があります（契約情報の修正で解消できるか確認してください）` : '手修正はありません', rows, '手修正の記録');
+  });
+
   safe('CHK-04', '消去の完全性（連結後のグループ内残高・取引が0）', () => {
     const ws = worksheet(gen, data.companies, pol, names, period);
     const zero = new Set(MUST_BE_ZERO);
     if (pol['POL-04'] === 'reclass') { zero.add('RENTAL_ASSET'); zero.add('RENTAL_ACC'); }
     if (pol['POL-05'] === 'by_lessee_dept') zero.add('RENTAL_DEP');
     const nz = ws.filter((r) => zero.has(r.acc) && r.consol !== 0).map((r) => ({ message: `${r.label}：連結後 ${fmt(r.consol)}` }));
+    // 残高が手修正だけによるもの（修正前の計算値では0）なら、NG ではなく確認事項にする
+    if (nz.length && gen.journals.some((j) => j.origLines || j.carriedOverride)) {
+      const gen0 = { ...gen, journals: gen.journals.filter((j) => !j.carriedOverride).map((j) => (j.origLines ? { ...j, lines: j.origLines } : j)) };
+      const ws0 = worksheet(gen0, data.companies, pol, names, period);
+      if (!ws0.some((r) => zero.has(r.acc) && r.consol !== 0)) return item('CHK-04', '消去の完全性（連結後のグループ内残高・取引が0）', WARN, `${nz.length}科目で残高が残っています（仕訳の手修正によるもの。修正前の計算値では0）`, nz.map((x) => ({ ...x, warn: true })), 'アプリ計算の個別残高に対する検査');
+    }
     return item('CHK-04', '消去の完全性（連結後のグループ内残高・取引が0）', nz.length ? NG : OK, nz.length ? `${nz.length}科目で残高が残っています` : '使用権資産・リース負債・受取リース料・支払利息等はすべて0（個別欄はアプリの計算値。帳簿との一致は CHK-10）', nz, 'アプリ計算の個別残高に対する検査');
   });
 
@@ -307,7 +332,7 @@ export function runChecks(data, period, pol, gen, names = {}, opts = {}) {
       if ((r.cap?.open || 0) !== n.cap) cont.push({ contract: c.id, message: `期首の持分変動累計（資本剰余金）${fmt(r.cap?.open)} ≠ 独立計算 ${fmt(n.cap)}` });
       // 開始仕訳に資本剰余金（持分変動の累計）が引き継がれているか
       if (pol['POL-03'] !== 'balance') {
-        const capLine = gen.journals.filter((j) => j.contractId === c.id && j.tpl === 'C-01N').flatMap((j) => j.lines).filter((l) => l.acc === 'CAP_SURPLUS').reduce((a, l) => a + l.amt, 0);
+        const capLine = gen.journals.filter((j) => j.contractId === c.id && j.tpl === 'C-01N' && !j.carriedOverride).flatMap((j) => j.origLines || j.lines).filter((l) => l.acc === 'CAP_SURPLUS').reduce((a, l) => a + l.amt, 0);
         if (capLine !== n.cap) cont.push({ contract: c.id, message: `開始仕訳の資本剰余金 ${fmt(capLine)} ≠ 前期末までの持分変動累計 ${fmt(n.cap)}` });
       }
     }
@@ -460,7 +485,7 @@ export function runChecks(data, period, pol, gen, names = {}, opts = {}) {
         const after = c.timing === 'advance' ? (sched.byIndex(last - 1)?.lessee.L_end || 0) - pays.get(last) : sched.byIndex(last)?.lessee.L_end || 0;
         expCur = endRec.lessee.L_end - after;
       }
-      const c10 = gen.journals.filter((j) => (j.src || j.tpl) === 'C-10' && j.contractId === c.id).flatMap((j) => j.lines).filter((l) => l.acc === 'LL_C').reduce((a, l) => a + l.amt, 0);
+      const c10 = gen.journals.filter((j) => (j.src || j.tpl) === 'C-10' && j.contractId === c.id && !j.carriedOverride).flatMap((j) => j.origLines || j.lines).filter((l) => l.acc === 'LL_C').reduce((a, l) => a + l.amt, 0);
       if (c10 !== expCur) cp.push({ contract: c.id, message: `流動部分：月次残高から ${fmt(expCur)}（${last !== null ? `${indexToJp(last)}の支払直後の残高との差` : '1年以内の支払なし'}）≠ 仕訳 ${fmt(c10)}` });
     }
     return item('CHK-14', 'リース負債の流動部分の独立計算（決算日後1年以内）', cp.length ? NG : OK, cp.length ? `${cp.length}契約で不一致` : '月次の残高推移から独立に求めた流動部分と C-10 の金額が一致', cp, '別経路で計算');
@@ -630,7 +655,7 @@ export function runChecks(data, period, pol, gen, names = {}, opts = {}) {
     return item('CHK-13', '確定済み期間の再現性（確定時のスナップショットと現在の再計算の一致）', ng.length ? NG : lk.length ? WARN : OK, ng.length ? `確定済み期間の数値・表示科目が ${ng.length}件変わっています。変更を取り消すか、理由を記録して確定を解除してください` : lk.length ? '数値は一致していますが、確定時から会計方針が変更されています' : (data.locks || []).length ? `確定済み ${(data.locks || []).length} 期間すべてで再計算結果が確定時と一致` : '確定済みの期間はありません', lk, '確定値との比較');
   });
 
-  const order = ['CHK-00', 'CHK-01', 'CHK-02', 'CHK-03', 'CHK-04', 'CHK-05', 'CHK-06', 'CHK-07', 'CHK-17', 'CHK-08', 'CHK-09', 'CHK-10', 'CHK-11', 'CHK-14', 'CHK-15', 'CHK-16', 'CHK-12', 'CHK-13'];
+  const order = ['CHK-00', 'CHK-18', 'CHK-01', 'CHK-02', 'CHK-03', 'CHK-04', 'CHK-05', 'CHK-06', 'CHK-07', 'CHK-17', 'CHK-08', 'CHK-09', 'CHK-10', 'CHK-11', 'CHK-14', 'CHK-15', 'CHK-16', 'CHK-12', 'CHK-13'];
   return out.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
 }
 

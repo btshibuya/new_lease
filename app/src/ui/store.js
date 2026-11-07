@@ -36,7 +36,7 @@ export function init() {
       state.data = res.data;
       state.loadWarnings = res.warnings;
       state.policies = sanitizePolicies(raw.policies);
-      state.ui = { ...state.ui, ...(raw.ui && typeof raw.ui === 'object' ? { granularity: raw.ui.granularity === 'quarter' ? 'quarter' : 'year', periodIndex: Number.isInteger(raw.ui.periodIndex) ? raw.ui.periodIndex : null, palette: ['bt', 'blue', 'lightblue', 'green', 'red', 'teal', 'dark'].includes(raw.ui.palette) ? raw.ui.palette : 'bt' } : {}) };
+      state.ui = { ...state.ui, ...(raw.ui && typeof raw.ui === 'object' ? { granularity: ['quarter', 'quarter_ytd'].includes(raw.ui.granularity) ? raw.ui.granularity : 'year', periodIndex: Number.isInteger(raw.ui.periodIndex) ? raw.ui.periodIndex : null, palette: ['bt', 'blue', 'lightblue', 'green', 'red', 'teal', 'dark'].includes(raw.ui.palette) ? raw.ui.palette : 'bt' } : {}) };
     } catch (e) {
       // 読込に失敗しても元のデータは消さず、別のキーに退避してから初期状態で開く
       try { localStorage.setItem(`${KEY}.backup.${Date.now()}`, JSON.stringify(raw)); } catch { /* 退避できない場合も続行 */ }

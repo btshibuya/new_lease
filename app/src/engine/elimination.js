@@ -452,6 +452,14 @@ export function contractJournals(c, period, ctx) {
   } else {
     // 内容別に、繰越の設定に従って「開始仕訳」「洗替」「当期の仕訳」を作る
     const push = (j) => { if (j) jr.push(j); };
+    // 前期以前に手修正した仕訳の差額（手修正後−修正前）は、繰越ありの内容なら開始仕訳で引き継ぐ
+    const priorOv = (ctx.overrides || []).filter((o) => o.contractId === c.id && ymToIndex(o.periodEnd) < period.start);
+    for (const K of [...new Set(priorOv.map((o) => o.src || o.tpl))]) {
+      if (!TEMPLATES[K] || TEMPLATES[K].kind !== 'CON' || K === 'C-12' || carryModeOf(carryCfg, K) === 'none') continue;
+      const adj = priorOv.filter((o) => (o.src || o.tpl) === K).flatMap((o) => overrideDiff(o).map((d) => ({ ...ln(d.acc, d.co, d.amt, meta, `手修正の引継（${o.periodStart}〜${o.periodEnd}：${o.reason}）`), tpl: K })));
+      const lines = ['C-10', 'C-11'].includes(K) ? adj.filter((l) => isBS(l.acc)) : openingOf(adj, K);
+      push(mk('C-01', lines, { src: K, id: `${period.label}-${c.id}-C-01-${K}-ADJ`, title: `開始仕訳：${TEMPLATES[K].title}（前期以前の手修正の引継）`, carriedOverride: true }));
+    }
     const openMk = (tpl, src, lines) => mk(tpl, lines, { src, id: `${period.label}-${c.id}-${tpl}-${src}`, title: `開始仕訳：${TEMPLATES[src].title}` });
     const revMk = (src, lines) => mk('C-01R', lines, { src, id: `${period.label}-${c.id}-C-01R-${src}`, title: `洗替：${TEMPLATES[src].title}（前期末の開始仕訳の戻し）` });
     for (const tpl of ['C-02', 'C-03', 'C-04', 'C-20', 'C-17']) {
@@ -543,7 +551,7 @@ export function manualFor(data, period) {
 
 /** 全契約の仕訳を作成 */
 export function generateAll(data, period, pol, opts = {}) {
-  const ctx = { pol, companies: data.companies, schedCache: opts.schedCache, carry: data.config?.carry || {} };
+  const ctx = { pol, companies: data.companies, schedCache: opts.schedCache, carry: data.config?.carry || {}, overrides: data.overrides?.journals || [] };
   const results = [];
   const errors = [];
   for (const c of data.contracts) {
@@ -555,7 +563,8 @@ export function generateAll(data, period, pol, opts = {}) {
   }
   const journals = results.flatMap((r) => r.journals);
   if (!opts.noManual) journals.push(...manualFor(data, period));
-  return { results, journals, errors };
+  const missing = applyOverrides(journals, data.overrides?.journals || [], period, data.contracts);
+  return { results, journals, errors, overrideMissing: missing };
 }
 
 /** 仕訳群を科目（表示名）別に集計：{label: amt}（借方＋） */
@@ -628,5 +637,75 @@ export function openingTrace(r, j, yearPeriods, pol, companies) {
     for (const l of j.lines) add(y, l.co, l.acc, l.amt, `${y}末の ${src} ${TEMPLATES[src].title}`);
   }
   void meta;
+  return out;
+}
+
+/** 手修正の差額（手修正後−修正前）。科目・会社別 */
+export function overrideDiff(o) {
+  const m = new Map();
+  for (const l of o.lines || []) m.set(`${l.acc}|${l.co}`, (m.get(`${l.acc}|${l.co}`) || 0) + l.amt);
+  for (const l of o.orig || []) m.set(`${l.acc}|${l.co}`, (m.get(`${l.acc}|${l.co}`) || 0) - l.amt);
+  return [...m].filter(([, v]) => v).map(([k, amt]) => { const [acc, co] = k.split('|'); return { acc, co, amt }; });
+}
+
+/** 手修正のキー（期間・契約・内容） */
+export const overrideKey = (period, j) => `${indexToYm(period.start)}|${indexToYm(period.end)}|${j.contractId}|${j.tpl}|${j.src || ''}`;
+
+/**
+ * 手修正を仕訳に反映する。元の行は origLines に残す（検算はアプリの計算値で行い、手修正は別に警告する）。
+ * @returns 対象の仕訳が見つからなかった手修正（契約や設定の変更で内容がなくなった等）
+ */
+export function applyOverrides(journals, overrides, period, contracts = []) {
+  const missing = [];
+  const ps = indexToYm(period.start), pe = indexToYm(period.end);
+  for (const o of overrides) {
+    if (o.periodStart !== ps || o.periodEnd !== pe) continue;
+    const j = journals.find((x) => !x.manual && !x.carriedOverride && x.contractId === o.contractId && x.tpl === o.tpl && (x.src || '') === (o.src || ''));
+    if (!j) { missing.push(o); continue; }
+    const c = contracts.find((x) => x.id === o.contractId);
+    const meta = c ? metaOf(c) : {};
+    const same = (a, b) => { const k = (ls) => ls.map((l) => `${l.acc}|${l.co}|${l.amt}`).sort().join(','); return k(a) === k(b); };
+    j.origLines = j.lines;
+    j.override = { key: o.key, reason: o.reason, at: o.at, stale: !same(j.lines, o.orig || []) };
+    j.lines = o.lines.filter((l) => l.amt).map((l) => ({ acc: l.acc, co: l.co, amt: l.amt, label: l.label, meta, bases: [`手修正：${o.reason}（${o.at || ''}）`, ...((j.origLines.find((x) => x.acc === l.acc && x.co === l.co)?.bases) || [])] }));
+  }
+  return missing;
+}
+
+/**
+ * 手修正した科目から、契約情報・会社マスタのどこを直すべきかの候補を返す。
+ * label は編集画面の項目名（ジャンプ先の特定に使う）、page は移動先の画面。
+ */
+export function overrideSuggestions(diff) {
+  const C = (label, why) => ({ page: 'contracts', label, why });
+  const M = (label, why) => ({ page: 'companies', label, why });
+  const S = (why) => ({ page: 'contracts', label: '返済スケジュール（支払額）の手修正', why, target: 'payment-schedule' });
+  const map = {
+    LL_C: [S('流動部分は決算日後1年以内の支払予定で決まります'), C('支払間隔', '支払の時期'), C('支払時期', '前払・後払')],
+    LL_NC: [C('割引率（年％）', 'リース負債の現在価値'), C('1回あたりリース料', 'リース負債の現在価値'), C('リース期間（月数）', 'リース負債の現在価値'), C('当初リース負債の取込値（空欄＝再計算）', '借手の帳簿値と合わせる'), S('個々の支払額')],
+    ROU_COST: [C('当初リース負債の取込値（空欄＝再計算）', '使用権資産＝リース負債＋初期直接費用等'), C('初期直接費用', '使用権資産に含めた額'), C('割引率（年％）', 'リース負債の現在価値')],
+    ROU_ACC: [C('償却月数（空欄＝リース期間）', '減価償却の期間'), C('リース開始年月', '償却の開始月')],
+    DEP_ROU: [C('償却月数（空欄＝リース期間）', '減価償却の期間'), C('初期直接費用', '償却の基礎')],
+    INT: [C('割引率（年％）', '利息の計算'), C('支払時期', '前払・後払で利息が変わります'), S('個々の支払額')],
+    LEASE_INC: [C('1回あたりリース料', '貸手の受取額'), C('フリーレント（無償の支払回数）', '定額法の総額'), C('段階賃料（支払回:金額）', '定額法の総額'), C('貸手のリース期間（月数、空欄＝借手と同じ）', '定額法の期間')],
+    ACCR_INC: [C('フリーレント（無償の支払回数）', '未収の発生'), C('段階賃料（支払回:金額）', '未収の発生'), C('貸手のリース期間（月数、空欄＝借手と同じ）', '定額法の期間')],
+    LEASE_ACCRUED: [C('支払時期', '未払の発生'), S('個々の支払額')],
+    RENTAL_ASSET: [C('対象資産の取得原価', '貸手資産'), C('按分比率（％）', '貸手資産の按分')],
+    RENTAL_ACC: [C('耐用年数（月数）', '貸手の減価償却'), C('取得年月', '貸手の減価償却')],
+    RECLASS_ASSET: [C('対象資産の取得原価', '貸手資産'), C('按分比率（％）', '貸手資産の按分')],
+    RECLASS_ACC: [C('耐用年数（月数）', '貸手の減価償却'), C('取得年月', '貸手の減価償却')],
+    RENTAL_DEP: [C('耐用年数（月数）', '貸手の減価償却'), C('按分比率（％）', '貸手資産の按分')],
+    DEP_RECLASS: [C('使用部門', '組替先の区分')],
+    DTA: [M('法定実効税率（％）', '税効果'), M('繰延税金資産の計上割合（％）', '回収可能性'), M('個別で税効果を計上', '取消の要否')],
+    TAX_ADJ: [M('法定実効税率（％）', '税効果'), M('繰延税金資産の計上割合（％）', '回収可能性')],
+    NCI: [M('非支配株主持分比率（％）', '按分の比率')],
+    NCI_PL: [M('非支配株主持分比率（％）', '按分の比率')],
+    TERM_GAIN: [C('中途解約年月（任意）', '解約の時期'), C('解約違約金（借手→貸手）', '違約金')],
+    PENALTY_EXP: [C('解約違約金（借手→貸手）', '違約金')],
+    PENALTY_INC: [C('解約違約金（借手→貸手）', '違約金')],
+    MOD_GAIN: [{ page: 'contracts', label: '条件変更・再測定（変更月の月初から適用）', why: '条件変更の内容', target: 'modifications' }],
+  };
+  const out = [];
+  for (const d of diff) for (const x of map[d.acc] || []) if (!out.some((y) => y.label === x.label && y.page === x.page)) out.push({ ...x, acc: d.acc });
   return out;
 }

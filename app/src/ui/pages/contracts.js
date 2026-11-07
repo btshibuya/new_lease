@@ -3,7 +3,7 @@ import { COLORS, emptyState, kpi } from '../components.js';
 import { gantt, barChart, lineChart } from '../charts.js';
 import { state, update, setUi } from '../store.js';
 import { guard } from '../app.js';
-import { validateContract, currentPortion, periodSummary } from '../../engine/schedule.js';
+import { validateContract, currentPortion, periodSummary, paymentPlan } from '../../engine/schedule.js';
 import { sanitizeContract } from '../../engine/data.js';
 import { contractTemplateCsv, contractsToCsv, importContractsCsv } from '../../engine/contractCsv.js';
 import { contractYearly, eFromSchedule } from '../../engine/reports.js';
@@ -156,7 +156,7 @@ function renderDetail(c, ctx) {
       card(null, barChart({ title: '借手の費用 vs 貸手の収益（年度別）', subtitle: '借手：減価償却費＋支払利息（逓減）、貸手：受取リース料（定額）。初期直接費用・解約損益がなければ、この差が当期の連結損益への影響', labels, series: [{ name: '借手の費用', values: yr.map((r) => r.lesseeExp), color: COLORS.lessee }, { name: '貸手の収益', values: yr.map((r) => r.inc), color: COLORS.lessor }], unit }))));
     // 年度別サマリーの数値を押すと「計算の確認」：式・値を入れた式・月ごとの内訳・出典
     const yc = (key) => (r) => yearCalc(key, r, c, sc);
-    parts.push(card('年度別サマリー（要件定義書 第10章の表と同じ構成。数値を押すと計算の確認）', table([
+    parts.push(withId('contract-yearly', card('年度別サマリー（要件定義書 第10章の表と同じ構成。数値を押すと計算の確認）', table([
       { label: '年度', key: 'label' },
       { label: '期首負債', key: 'openL', num: true, calc: yc('openL') },
       { label: '新規', key: 'newL', num: true, calc: yc('newL') },
@@ -172,8 +172,8 @@ function renderDetail(c, ctx) {
       { label: '貸手収益', key: 'inc', num: true, calc: yc('inc') },
       { label: '当期差', key: 'diff', num: true, calc: yc('diff') },
       { label: '消去差額（累計）', key: 'cumE', num: true, title: 'リース負債＋未払−使用権資産簿価−貸手の未収', calc: yc('cumE') },
-    ], yr)));
-    parts.push(card(null, h('details', null, h('summary', null, `月次スケジュール（${sc.months.length}か月）を表示`), table([
+    ], yr))));
+    parts.push(card(null, h('details', { id: 'contract-monthly' }, h('summary', null, `償却・返済の月次スケジュール（${sc.months.length}か月）を表示`), table([
       { label: '年月', render: (x) => indexToJp(x.m) },
       { label: '支払', num: true, render: (x) => x.lessee.pay || x.lessor.cash },
       { label: '利息', num: true, render: (x) => (x.lessee.int || 0) + (x.lessee.accr || 0) },
@@ -184,6 +184,7 @@ function renderDetail(c, ctx) {
       { label: '貸手の未収', num: true, render: (x) => x.lessor.R_end },
       { label: 'イベント', render: (x) => [x.lessee.commence ? (sc.meta.measSource !== 'none' ? '適用開始（経過措置）' : '開始') : '', x.lessee.remeasure ? `条件変更（負債 ${fmt(x.lessee.remeasure.Lold)}→${fmt(x.lessee.remeasure.Lnew)}）` : '', x.lessee.term ? (x.lessee.term.kind === 'termination' ? '中途解約' : '満了') : ''].filter(Boolean).join('・') },
     ], sc.months, { className: 'compact' }))));
+    parts.push(paymentCard(c));
     parts.push(actualsCard(c, sc, ctx.periods));
   }
   return h('div', { class: 'detail', id: 'contract-detail' }, ...parts);
@@ -223,7 +224,7 @@ function modsFieldset(f) {
     h('td', null, h('input', { type: 'text', maxlength: 200, value: m.note || '', 'aria-label': '内容', on: { input: (e) => { m.note = e.target.value; } } })),
     h('td', null, h('button', { class: 'btn-link danger', type: 'button', on: { click: () => { f.modifications.splice(i, 1); draw(); } } }, '削除')))));
   draw();
-  return h('fieldset', null, h('legend', null, '条件変更・再測定（変更月の月初から適用）'),
+  return h('fieldset', { id: 'modifications' }, h('legend', null, '条件変更・再測定（変更月の月初から適用）'),
     h('div', { class: 'alert alert-info' }, '借手はリース負債を変更後の残存リース料の現在価値で再測定し、使用権資産を同額調整します（期間短縮で範囲が縮小する場合は一部を取り崩して損益）。指数・レートによる変動は割引率を「変更なし」、期間の見直し等は見直し後の割引率を入力します。貸手は変更日から新たなリースとして、未収（前受）を含めて残存期間で定額認識します。'),
     h('div', { class: 'table-wrap' }, h('table', { class: 'tbl compact' }, h('thead', null, h('tr', null, ['変更年月', '変更後の1回あたりリース料', '変更後のリース期間（開始からの総月数）', '変更後の割引率（年％）', '内容', ''].map((t) => h('th', null, t)))), body)),
     h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', on: { click: () => { f.modifications.push({ ym: '', payment: null, termMonths: null, rate: null, note: '' }); draw(); } } }, '＋ 条件変更を追加')));
@@ -321,4 +322,34 @@ function editor(c, data) {
       dirtyMark));
   const lockNote = (data.locks || []).length ? h('div', { class: 'alert alert-warn' }, `確定済みの期間が ${(data.locks || []).length} 件あります。確定済み期間の数値が変わる変更をすると、検算 CHK-13 が NG になります。条件変更は変更日以降の期間に反映されるよう入力してください。`) : null;
   return h('section', { class: 'card', id: 'contract-editor' }, h('h2', null, `契約の編集：${c.id} ${c.name}`), lockNote, form);
+}
+
+const withId = (id, el) => { el.id = id; return el; };
+
+/** 返済スケジュール（支払額）の手修正：支払月ごとに支払額を直す（リース負債・利息・貸手の収益に反映） */
+function paymentCard(c) {
+  const k = (c.modifications || []).length;
+  const plan = paymentPlan({ ...c, paymentOverrides: [] }, k);
+  const draft = new Map((c.paymentOverrides || []).map((x) => [x.ym, x.amount]));
+  const reason = h('input', { type: 'text', maxlength: 200, value: (c.paymentOverrides || [])[0]?.reason || '', placeholder: '例）借手の支払実績に合わせた', 'aria-label': '手修正の理由' });
+  const rows = plan.payments.map((p) => {
+    const ym = indexToYm(p.month);
+    const inp = h('input', { type: 'number', step: 'any', min: 0, value: draft.has(ym) ? draft.get(ym) : '', placeholder: '修正なし', 'aria-label': `${indexToJp(p.month)}の支払額`, on: { input: (e) => { if (e.target.value === '') draft.delete(ym); else draft.set(ym, Number(e.target.value)); } } });
+    return h('tr', { class: draft.has(ym) ? 'selected' : '' }, h('td', { class: 'num' }, p.no), h('td', { class: 'nw' }, indexToJp(p.month)), amt(p.amount), h('td', null, inp));
+  });
+  const outside = (c.paymentOverrides || []).filter((x) => !plan.payments.some((p) => indexToYm(p.month) === x.ym));
+  return h('section', { class: 'card', id: 'payment-schedule' }, h('h2', null, `返済スケジュール（支払額）の手修正：${c.id}`),
+    h('div', { class: 'alert alert-info' }, '支払月ごとに支払額を直せます。直した支払額でリース負債（現在価値）・利息・償却・貸手の受取リース料（定額法）を計算し直し、仕訳・開始仕訳・注記にも反映します。段階賃料・フリーレントで表せる場合は、契約の編集画面で入力してください。手修正は検算 CHK-18 に記録されます。'),
+    outside.length ? h('div', { class: 'alert alert-warn' }, `支払日ではない月の手修正があります（反映されません）：${outside.map((x) => x.ym).join('、')}`) : null,
+    h('div', { class: 'tbl-wrap scroll-y' }, h('table', { class: 'tbl compact' }, h('thead', null, h('tr', null, ['回', '支払月', '契約条件の支払額', '手修正後の支払額'].map((t) => h('th', null, t)))), h('tbody', null, rows))),
+    h('div', { class: 'form-grid' }, ...field('手修正の理由', reason)),
+    h('div', { class: 'actions' },
+      h('button', { class: 'btn btn-primary', type: 'button', on: { click: () => {
+        const list = [...draft].filter(([ym]) => plan.payments.some((p) => indexToYm(p.month) === ym)).map(([ym, amount]) => ({ ym, amount, reason: reason.value.trim() }));
+        if (list.length && !reason.value.trim()) return toast('手修正の理由を入力してください', 'error');
+        update((d) => { const t = d.contracts.find((x) => x.id === c.id); t.paymentOverrides = sanitizeContract({ ...t, paymentOverrides: list }).paymentOverrides; }, '返済スケジュールの手修正', `${c.id}：${list.map((x) => `${x.ym} ${x.amount}`).join('、') || 'なし'}${reason.value.trim() ? `（${reason.value.trim().slice(0, 60)}）` : ''}`);
+        toast('保存しました');
+      } } }, '支払額の手修正を保存'),
+      (c.paymentOverrides || []).length ? h('button', { class: 'btn btn-danger', type: 'button', on: { click: async () => { if (await ask({ title: '支払額の手修正をすべて取り消しますか？', message: '契約条件の支払額に戻します。', okLabel: '取り消す', danger: true })) update((d) => { d.contracts.find((x) => x.id === c.id).paymentOverrides = []; }, '返済スケジュールの手修正の取消', c.id); } } }, 'すべて取り消す') : null,
+      h('span', { class: 'muted small' }, `手修正：${(c.paymentOverrides || []).length}件`)));
 }

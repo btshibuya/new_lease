@@ -139,7 +139,10 @@ export function paymentPlan(c, k) {
     const t = c.timing === 'advance' ? month : month + 1;
     let amount = paymentAmount(c, j);
     for (const m of mods) if (ymToIndex(m.ym) <= month && m.payment !== null && m.payment !== undefined) amount = m.payment;
-    payments.push({ no: j, month, t, amount });
+    // 返済スケジュールの手修正（支払月ごとの支払額）
+    const ov = (c.paymentOverrides || []).find((x) => x.ym === indexToYm(month));
+    if (ov) amount = ov.amount;
+    payments.push({ no: j, month, t, amount, overridden: !!ov });
   }
   return { N, payments };
 }

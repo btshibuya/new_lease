@@ -66,10 +66,17 @@ export function buildPeriods(fromIndex, toIndex, fyeMonth, granularity = 'year')
   let [s, e] = fiscalYearOf(fromIndex, fyeMonth);
   while (s <= toIndex) {
     if (granularity === 'quarter') {
+      // 四半期（発生）：各四半期の3か月
       for (let q = 0; q < 4; q++) {
         const qs = s + q * 3;
         const qe = qs + 2;
         periods.push({ start: qs, end: qe, label: `${fiscalLabel(e)} 第${q + 1}四半期（〜${indexToJp(qe)}）`, fyEnd: e });
+      }
+    } else if (granularity === 'quarter_ytd') {
+      // 四半期（累計）：期首から各四半期末まで（第4四半期累計＝年度）
+      for (let q = 0; q < 4; q++) {
+        const qe = s + q * 3 + 2;
+        periods.push({ start: s, end: qe, label: `${fiscalLabel(e)} 第${q + 1}四半期累計（${indexToJp(s)}〜${indexToJp(qe)}）`, fyEnd: e, ytd: true });
       }
     } else {
       periods.push({ start: s, end: e, label: fiscalLabel(e), fyEnd: e });

@@ -204,6 +204,20 @@ legend { font-weight: 700; color: var(--navy); padding: 0 6px; }
 .tbl.journal th:nth-child(2), .tbl.journal th:nth-child(4) { width: 140px; }
 .journal-card.compact { padding: 8px 10px; margin: 6px 0; }
 .journal-m-wrap { display: none; }
+.jcard-actions { margin-left: auto; display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.journal-card.overridden { border-color: #e9c46a; }
+.ov-notice { margin: 6px 0 8px; }
+.ov-notice .actions { margin: 6px 0 0; }
+.jump-list { list-style: none; padding: 0; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; max-height: 60vh; overflow-y: auto; }
+.jump-btn { width: 100%; text-align: left; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; white-space: normal; }
+.ov-table input[type=number] { width: 110px; }
+.ov-table select { max-width: 260px; }
+/* 仕訳表は画面（カード）の横幅に合わせて切り替える：十分な幅があれば「借方科目｜借方金額｜貸方科目｜貸方金額」、狭ければ「科目｜借方｜貸方」 */
+.journal-card { container-type: inline-size; }
+@container (max-width: 600px) {
+  .tbl-wrap:has(> .tbl.journal) { display: none; }
+  .journal-m-wrap { display: block; }
+}
 .tbl.journal-m { table-layout: fixed; width: 100%; font-size: 12.5px; }
 .tbl.journal-m th:nth-child(2), .tbl.journal-m th:nth-child(3) { width: 84px; }
 .tbl.journal-m th, .tbl.journal-m td { padding: 5px 6px; }
@@ -333,9 +347,6 @@ td.hl, .hl:not(rect) { fill: initial; }
   .form-grid { grid-template-columns: 1fr; }
   .fg-input .row { flex-wrap: wrap; }
   .kpi { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-  /* スマホ：仕訳は1行に1科目の表（科目｜借方｜貸方）に切り替える */
-  .journal-card .tbl-wrap:has(> .tbl.journal) { display: none; }
-  .journal-m-wrap { display: block; }
   /* スマホ：仕訳の表は金額の列を狭くして、科目の列を広く */
   .tbl.journal { font-size: 12.5px; }
   .tbl.journal th:nth-child(2), .tbl.journal th:nth-child(4) { width: 76px; }

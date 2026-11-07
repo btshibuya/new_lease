@@ -109,11 +109,16 @@ export function journalCard(j, ctx, opts = {}) {
       }
     } } }, h('summary', null, `会社別・契約別の内訳を表示（${j.parts.length}本）`), box);
   }
-  return h('article', { class: `journal-card kind-${j.kind}${opts.compact ? ' compact' : ''}` },
+  const acts = opts.actions ? opts.actions(j).filter(Boolean) : [];
+  return h('article', { class: `journal-card kind-${j.kind}${opts.compact ? ' compact' : ''}${j.override ? ' overridden' : ''}` },
     h('header', null,
       h('span', { class: `tpl tpl-${j.kind}` }, j.src ? `${j.tpl}・${j.src}` : j.tpl),
       h('span', { class: 'jt' }, j.title),
-      opts.hideContract ? null : h('span', { class: 'jc' }, j.parts ? j.groupLabel : j.manual ? `手入力（理由：${j.reason}）` : `${j.contractId}：${coName(j.lessorCo, companies)} → ${coName(j.lesseeCo, companies)}`)),
+      j.override || (j.parts && j.parts.some((p) => p.override)) ? h('span', { class: 'badge caution' }, '手修正あり') : null,
+      j.carriedOverride ? h('span', { class: 'badge caution' }, '手修正の引継') : null,
+      opts.hideContract ? null : h('span', { class: 'jc' }, j.parts ? j.groupLabel : j.manual ? `手入力（理由：${j.reason}）` : `${j.contractId}：${coName(j.lessorCo, companies)} → ${coName(j.lesseeCo, companies)}`),
+      acts.length ? h('span', { class: 'jcard-actions' }, ...acts) : null),
+    opts.notice ? opts.notice(j) : null,
     tbl, tblM, drill, opts.noBasis || j.parts ? null : basis);
 }
 

@@ -139,6 +139,8 @@ export function sanitizeContract(c) {
       depClass: oneOf(r.depClass, ['cogs', 'nonop'], 'cogs'),
       termMonths: r.termMonths === null || r.termMonths === undefined || r.termMonths === '' ? null : int(r.termMonths, 12, { min: 1, max: 1200 }),
     },
+    // 返済スケジュールの手修正（支払月 → 支払額）
+    paymentOverrides: Array.isArray(c.paymentOverrides) ? c.paymentOverrides.slice(0, 1200).filter((x) => x && ym(x.ym)).map((x) => ({ ym: ym(x.ym), amount: num(x.amount, 0, { min: 0 }), reason: str(x.reason, 200) })) : [],
     actuals,
   };
 }
@@ -152,6 +154,16 @@ export function sanitizeCarry(raw) {
   if (!raw || typeof raw !== 'object') return out;
   for (const k of ['C-02', 'C-03', 'C-04', 'C-20', 'C-17', 'C-13', 'C-14', 'C-10', 'C-11']) if (['carry_reverse', 'carry', 'none'].includes(raw[k])) out[k] = raw[k];
   return out;
+}
+
+/** 仕訳の手修正（期間・契約・内容ごとに、手修正後の行と修正前の行・理由） */
+export function sanitizeOverrides(raw) {
+  const list = raw && Array.isArray(raw.journals) ? raw.journals.slice(0, 5000) : [];
+  const lines = (ls) => (Array.isArray(ls) ? ls.slice(0, 50).filter((l) => l && /^[A-Z_]{2,20}$/.test(l.acc)).map((l) => ({ acc: l.acc, co: str(l.co, 20), amt: num(l.amt, 0), label: str(l.label, 60) })) : []);
+  return { journals: list.filter((o) => o && ym(o.periodStart) && ym(o.periodEnd) && /^[A-Z]-?[0-9A-Z-]{1,8}$/.test(o.tpl || '')).map((o) => ({
+    key: str(o.key, 120), periodStart: ym(o.periodStart), periodEnd: ym(o.periodEnd), contractId: str(o.contractId, 30), tpl: str(o.tpl, 10), src: str(o.src, 10),
+    lines: lines(o.lines), orig: lines(o.orig), reason: str(o.reason, 300), at: str(o.at, 40),
+  })) };
 }
 
 export function sanitizeData(raw) {
@@ -231,6 +243,7 @@ export function sanitizeData(raw) {
       locks,
       checkNotes,
       noteInputs: sanitizeNoteInputs(raw.noteInputs),
+      overrides: sanitizeOverrides(raw.overrides),
       auditLog,
       auditAnchor,
       importedLogs,

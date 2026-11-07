@@ -1,7 +1,9 @@
 import { h, card, select, download, toast, ask, table, amt } from '../dom.js';
 import { journalCard, kpi, emptyState, groupJournals, contentKey, contentName, contentOrder, pairLabel, aggregateLines } from '../components.js';
 import { update } from '../store.js';
-import { TEMPLATES, CARRY_DEFS, CARRY_MODES, carryModeOf, carryWarnings, generateAll, openingTrace } from '../../engine/elimination.js';
+import { TEMPLATES, CARRY_DEFS, CARRY_MODES, carryModeOf, carryWarnings, generateAll, openingTrace, overrideKey, overrideDiff, overrideSuggestions } from '../../engine/elimination.js';
+import { goTo, chooseAndGo } from '../nav.js';
+import { openCalc } from '../panel.js';
 import { accountLabel, ACCOUNTS } from '../../engine/accounts.js';
 import { toCsv, sanitizeManual } from '../../engine/data.js';
 import { fmt, indexToYm, indexToJp } from '../../engine/util.js';
@@ -41,7 +43,12 @@ export function renderJournals(ctx) {
   const grouped = groupJournals(js, filter.mode, ctx);
   const opening = grouped.filter((j) => String(j.tpl).startsWith('C-01') || j.tpl === 'M-01O');
   const current = grouped.filter((j) => !opening.includes(j));
-  const cards = (arr) => h('div', { class: 'journals' }, arr.map((j) => journalCard(j, { pol, names, companies }, { links })));
+  // 各仕訳：根拠の画面へ（候補が複数なら選ぶ）、金額の手修正（契約単位の自動作成の仕訳のみ）
+  const actions = (j) => [
+    h('button', { class: 'btn btn-sm', type: 'button', on: { click: () => chooseAndGo(`根拠の画面へ：${j.src ? `${j.tpl}・${j.src}` : j.tpl} ${j.title}`, relatedCandidates(j, ctx)) } }, '根拠の画面へ'),
+    !j.parts && !j.manual && !j.carriedOverride ? h('button', { class: 'btn btn-sm', type: 'button', on: { click: () => editOverride(j, ctx) } }, j.override ? '手修正を編集' : '金額を修正') : null,
+  ];
+  const cards = (arr) => h('div', { class: 'journals' }, arr.map((j) => journalCard(j, { pol, names, companies }, { links, actions, notice: (x) => overrideNotice(x, ctx) })));
   const modeNote = { contract: '契約ごとに、内容別の仕訳を表示しています。', company: '内容ごとに、会社（貸手→借手の組合せ。個社修正は会社）単位で合算して表示しています。', total: '内容ごとに、全契約を合算して表示しています。「会社別・契約別の内訳を表示」でドリルダウンできます。' }[filter.mode];
 
   return h('div', { class: 'page' },
@@ -258,4 +265,132 @@ function exportCsv(js, ctx) {
     }
   }
   download(`仕訳帳_${period.label}.csv`, toCsv(rows), 'text/csv;charset=utf-8');
+}
+
+// ── 仕訳の手修正・根拠の画面への移動 ──
+
+/** 仕訳の内容ごとの、根拠となる画面（候補） */
+const RELATED = {
+  'C-02': ['contract', 'yearly', 'pay', 'pol:POL-07'],
+  'C-03': ['contract', 'monthly', 'pol:POL-06'],
+  'C-04': ['contract', 'yearly', 'monthly', 'pay', 'pol:POL-09'],
+  'C-17': ['contract', 'monthly'],
+  'C-20': ['mods', 'contract', 'monthly'],
+  'C-10': ['yearly', 'pay', 'check:CHK-14'],
+  'C-11': ['contract', 'pol:POL-04'],
+  'C-12': ['contract', 'pol:POL-05'],
+  'C-13': ['tax', 'coTax', 'pol:POL-02', 'check:CHK-11'],
+  'C-14': ['nci', 'coNci', 'pol:POL-01', 'check:CHK-11'],
+  'IND-01': ['coLegacy', 'contract'],
+  'IND-02': ['coLegacy', 'yearly'],
+};
+
+export function relatedCandidates(j, ctx) {
+  const K = j.src || j.tpl;
+  const keys = [...(RELATED[K] || ['contract'])];
+  const cids = [...new Set((j.parts || [j]).filter((p) => !p.manual).map((p) => p.contractId))].filter((x) => x && x !== '—');
+  const out = [];
+  if (String(j.tpl).startsWith('C-01') && j.tpl !== 'C-01R' && !j.parts && !j.carriedOverride) out.push({ title: '開始仕訳の年度別内訳（前期以前のどの仕訳から生じたか）', desc: '右の「計算の確認」に表示', go: () => showTrace(j, ctx) });
+  const perContract = (cid) => ({
+    contract: { title: `契約情報：${cid}`, desc: '契約の編集画面', page: 'contracts', contractId: cid, target: 'contract-editor' },
+    yearly: { title: `返済スケジュール（年度別サマリー）：${cid}`, desc: '期首・期末のリース負債、利息、元本、流動部分', page: 'contracts', contractId: cid, target: 'contract-yearly' },
+    monthly: { title: `償却・返済の月次スケジュール：${cid}`, desc: '月ごとの支払・利息・償却費・残高', page: 'contracts', contractId: cid, target: 'contract-monthly' },
+    pay: { title: `返済スケジュール（支払額）の手修正：${cid}`, desc: '支払月ごとの支払額', page: 'contracts', contractId: cid, target: 'payment-schedule' },
+    mods: { title: `条件変更・再測定：${cid}`, desc: '契約の編集画面の条件変更', page: 'contracts', contractId: cid, label: '条件変更・再測定（変更月の月初から適用）' },
+  });
+  for (const k of keys) {
+    if (perContract('x')[k]) for (const cid of cids.slice(0, 8)) out.push(perContract(cid)[k]);
+    else if (k === 'tax') out.push({ title: '税効果のプルーフ', desc: '会社別の純資産修正額 × 法定実効税率（期首・期末）', page: 'worksheet', target: 'tax-proof' });
+    else if (k === 'nci') out.push({ title: '非支配株主持分のプルーフ', desc: '税効果後の修正額 × 借手の非支配株主持分比率', page: 'worksheet', target: 'nci-proof' });
+    else if (k === 'coTax') out.push({ title: '会社マスタ：法定実効税率・繰延税金資産の計上割合', page: 'companies', label: '法定実効税率（％）' });
+    else if (k === 'coNci') out.push({ title: '会社マスタ：非支配株主持分比率', page: 'companies', label: '非支配株主持分比率（％）' });
+    else if (k === 'coLegacy') out.push({ title: '会社マスタ：旧科目名・流動区分', page: 'companies', label: '旧科目名を使用' });
+    else if (k.startsWith('pol:')) out.push({ title: `会計方針 ${k.slice(4)}`, desc: '選択肢と根拠', page: 'policies', target: k.slice(4) });
+    else if (k.startsWith('check:')) out.push({ title: `検算 ${k.slice(6)}`, desc: '独立計算との比較', page: 'checks', target: k.slice(6) });
+  }
+  if (j.override) for (const s of overrideSuggestions(overrideDiff({ lines: j.lines, orig: j.origLines }))) out.unshift({ title: `修正候補：${s.label}`, desc: `手修正した科目に関係する項目（${s.why}）`, page: s.page, contractId: s.page === 'contracts' ? j.contractId : undefined, label: s.target ? undefined : s.label, target: s.target });
+  return out;
+}
+
+/** 開始仕訳の年度別内訳を「計算の確認」に表示 */
+function showTrace(j, ctx) {
+  const r = ctx.gen.results.find((x) => x.contract.id === j.contractId);
+  if (!r) return;
+  const tr = openingTrace(r, j, ctx.yearPeriods, ctx.pol, ctx.companies);
+  const coName = (code) => (code === 'CONSOL' ? '連結' : ctx.companies.find((c) => c.code === code)?.name || code);
+  openCalc({ context: `${j.title}（${j.contractId}）`, title: '開始仕訳の年度別内訳', value: j.lines.filter((l) => l.amt > 0).reduce((a, l) => a + l.amt, 0),
+    breakdown: { title: `前期以前の仕訳（${tr.length}行）`, cols: [{ label: '年度', key: 'year' }, { label: '科目', key: 'accName' }, { label: '会社', key: 'coName' }, { label: '金額（借方＋）', key: 'amt', num: true }], rows: tr.map((x) => ({ ...x, accName: accountLabel({ acc: x.acc, meta: {} }, ctx.pol, ctx.names), coName: coName(x.co) })) },
+    notes: [...new Set(tr.map((x) => x.note))].slice(0, 10), sources: [{ label: '前期末からの繰越', kind: 'carry' }] });
+}
+
+/** 手修正した仕訳の注意書き：差額・契約情報の修正候補（押すと該当箇所へ移動）・元に戻す */
+export function overrideNotice(j, ctx) {
+  if (j.carriedOverride) return h('div', { class: 'alert alert-warn ov-notice' }, '前期以前に手修正した仕訳の差額（手修正後−修正前）を、開始仕訳で引き継いでいます。元の手修正を取り消すと、この仕訳もなくなります。');
+  if (!j.override) return null;
+  const { pol, names, companies } = ctx;
+  const diff = overrideDiff({ lines: j.lines, orig: j.origLines });
+  const sug = overrideSuggestions(diff);
+  const coName = (code) => (code === 'CONSOL' ? '連結' : companies.find((c) => c.code === code)?.name || code);
+  return h('div', { class: 'alert alert-warn ov-notice' },
+    h('div', null, h('b', null, '手修正あり：'), `理由「${j.override.reason}」（${j.override.at || ''}）。修正前との差額：`, diff.map((d) => `${accountLabel({ acc: d.acc, meta: j.lines.find((l) => l.acc === d.acc)?.meta || {} }, pol, names)}（${coName(d.co)}）${d.amt > 0 ? '＋' : ''}${fmt(d.amt)}`).join('、') || 'なし'),
+    j.override.stale ? h('div', null, h('b', null, '注意：'), '手修正したあとに、元の計算（契約・会計方針など）が変わりました。手修正を見直してください。') : null,
+    sug.length ? h('div', null, h('b', null, '契約情報等の修正候補：'), '仕訳の金額だけを直すと、翌期以降の計算・注記・検算と食い違います。可能なら次の項目を直して、手修正を元に戻してください。') : null,
+    h('div', { class: 'actions' },
+      ...sug.map((s) => h('button', { class: 'btn btn-sm', type: 'button', title: s.why, on: { click: () => goTo({ page: s.page, contractId: s.page === 'contracts' ? j.contractId : undefined, label: s.target ? undefined : s.label, target: s.target }) } }, `${s.page === 'companies' ? '会社マスタ：' : ''}${s.label} →`)),
+      h('button', { class: 'btn btn-sm btn-danger', type: 'button', on: { click: async () => {
+        if (!(await ask({ title: '手修正を元に戻しますか？', message: 'アプリの計算値に戻します。翌期以降の開始仕訳への引継もなくなります。', okLabel: '元に戻す', danger: true }))) return;
+        update((d) => { d.overrides.journals = (d.overrides.journals || []).filter((o) => o.key !== j.override.key); }, '仕訳の手修正の取消', `${j.contractId} ${j.tpl}${j.src ? `・${j.src}` : ''}`);
+        toast('元に戻しました');
+      } } }, '手修正を元に戻す')));
+}
+
+/** 仕訳の金額の手修正（貸借一致・理由必須。監査ログに記録） */
+export function editOverride(j, ctx) {
+  const { pol, names, companies, period } = ctx;
+  const orig = j.origLines || j.lines;
+  const rows = j.lines.map((l) => ({ acc: l.acc, co: l.co, meta: l.meta, dr: l.amt > 0 ? l.amt : '', cr: l.amt < 0 ? -l.amt : '' }));
+  const accOpts = Object.entries(ACCOUNTS).filter(([k]) => !['MANUAL', 'MANUAL_PL'].includes(k)).map(([k, v]) => [k, v.name]);
+  const coOpts = [['CONSOL', '連結'], ...companies.map((c) => [c.code, `${c.code} ${c.name}`])];
+  const body = h('tbody');
+  const bal = h('div', { class: 'muted' });
+  const recalc = () => {
+    const d = rows.reduce((a, r) => a + (Number(r.dr) || 0), 0), c = rows.reduce((a, r) => a + (Number(r.cr) || 0), 0);
+    bal.textContent = `借方 ${fmt(d)} ／ 貸方 ${fmt(c)}${d === c ? '（一致）' : `（差額 ${fmt(d - c)}）`}`;
+    bal.className = d === c ? 'muted' : 'red';
+  };
+  const draw = () => {
+    body.replaceChildren(...rows.map((r, i) => h('tr', null,
+      h('td', null, r.fixed !== false && orig.some((o) => o.acc === r.acc && o.co === r.co) ? accountLabel({ acc: r.acc, meta: r.meta || {} }, pol, names) : select(accOpts, r.acc, (v) => { r.acc = v; })),
+      h('td', null, orig.some((o) => o.acc === r.acc && o.co === r.co) && r.fixed !== false ? (r.co === 'CONSOL' ? '連結' : r.co) : select(coOpts, r.co, (v) => { r.co = v; })),
+      h('td', null, h('input', { type: 'number', step: 'any', min: 0, value: r.dr, 'aria-label': '借方', on: { input: (e) => { r.dr = e.target.value; recalc(); } } })),
+      h('td', null, h('input', { type: 'number', step: 'any', min: 0, value: r.cr, 'aria-label': '貸方', on: { input: (e) => { r.cr = e.target.value; recalc(); } } })),
+      h('td', { class: 'small muted' }, (() => { const o = orig.filter((x) => x.acc === r.acc && x.co === r.co).reduce((a, x) => a + x.amt, 0); return o ? `計算値 ${o > 0 ? '借' : '貸'} ${fmt(Math.abs(o))}` : '（追加）'; })()),
+      h('td', null, h('button', { class: 'btn-link danger', type: 'button', on: { click: () => { rows.splice(i, 1); draw(); recalc(); } } }, '削除')))));
+  };
+  draw(); recalc();
+  const reason = h('textarea', { rows: 2, maxlength: 300, placeholder: '例）借手の帳簿の利息と端数処理が異なるため帳簿に合わせた', 'aria-label': '手修正の理由' });
+  reason.value = j.override?.reason || '';
+  let overlay;
+  const close = () => overlay.remove();
+  const save = () => {
+    const lines = rows.map((r) => ({ acc: r.acc, co: r.co, amt: (Number(r.dr) || 0) - (Number(r.cr) || 0) })).filter((l) => l.amt);
+    const sum = lines.reduce((a, l) => a + l.amt, 0);
+    if (sum !== 0) return toast('借方と貸方の合計を一致させてください', 'error');
+    if (!reason.value.trim()) return toast('手修正の理由を入力してください', 'error');
+    const key = overrideKey(period, j);
+    const rec = { key, periodStart: indexToYm(period.start), periodEnd: indexToYm(period.end), contractId: j.contractId, tpl: j.tpl, src: j.src || '', lines, orig: orig.map((l) => ({ acc: l.acc, co: l.co, amt: l.amt })), reason: reason.value.trim(), at: new Date().toLocaleString('ja-JP') };
+    update((d) => { d.overrides = d.overrides || { journals: [] }; d.overrides.journals = [...(d.overrides.journals || []).filter((o) => o.key !== key), rec]; }, '仕訳の手修正', `${j.contractId} ${j.tpl}${j.src ? `・${j.src}` : ''}（${period.label}）：${reason.value.trim().slice(0, 80)}`);
+    close();
+    toast('手修正を保存しました。契約情報の修正候補を確認してください');
+  };
+  const box = h('div', { class: 'modal ask', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'ov-title' },
+    h('div', { class: 'modal-head' }, h('b', { id: 'ov-title' }, `仕訳の金額を修正：${j.tpl}${j.src ? `・${j.src}` : ''} ${j.title}（${j.contractId}・${period.label}）`)),
+    h('p', { class: 'ask-msg' }, 'この期間のこの仕訳だけを修正します（繰越ありの内容は、差額を翌期以降の開始仕訳に引き継ぎます）。仕訳の金額だけを直すと契約情報と食い違うため、保存後に表示される「契約情報等の修正候補」も確認してください。'),
+    h('div', { class: 'table-wrap' }, h('table', { class: 'tbl compact ov-table' }, h('thead', null, h('tr', null, ['科目', '会社', '借方', '貸方', '修正前', ''].map((t) => h('th', null, t)))), body)),
+    h('div', { class: 'actions' }, h('button', { class: 'btn btn-sm', type: 'button', on: { click: () => { rows.push({ acc: 'LL_NC', co: j.lesseeCo || 'CONSOL', dr: '', cr: '', fixed: false }); draw(); } } }, '＋ 行を追加'), bal),
+    h('label', { class: 'fg-label' }, '手修正の理由（必須・監査ログに記録）'), reason,
+    h('div', { class: 'row ask-actions' }, h('span', { class: 'spacer' }), h('button', { class: 'btn', type: 'button', on: { click: close } }, 'キャンセル'), h('button', { class: 'btn btn-primary', type: 'button', on: { click: save } }, '保存')));
+  overlay = h('div', { class: 'modal-bg', on: { keydown: (e) => { if (e.key === 'Escape') close(); } } }, box);
+  document.body.appendChild(overlay);
+  box.querySelector('input')?.focus();
 }

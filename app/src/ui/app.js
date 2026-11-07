@@ -159,7 +159,7 @@ function header() {
 
 function pageHead(page, ctx) {
   const seg = h('div', { class: 'seg', role: 'group', 'aria-label': '期間の区切り' },
-    [['year', '年度'], ['quarter', '四半期']].map(([v2, l]) => h('button', { type: 'button', class: state.ui.granularity === v2 ? 'on' : '', on: { click: () => setUi({ granularity: v2, periodIndex: null }) } }, l)));
+    [['year', '年度'], ['quarter', '四半期（発生）'], ['quarter_ytd', '四半期（累計）']].map(([v2, l]) => h('button', { type: 'button', class: state.ui.granularity === v2 ? 'on' : '', on: { click: () => setUi({ granularity: v2, periodIndex: null }) } }, l)));
   const st = ctx.status === 'ok' ? statusBadge('ok', '検算OK') : ctx.status === 'warn' ? statusBadge('warn', '検算：確認事項あり') : statusBadge('ng', '検算：NGあり');
   return h('div', { class: 'page-head' },
     h('div', null, h('div', { class: 'crumb' }, page.step ? `手順${page.step}／6　${page.label}` : page.label), h('h1', null, ctx.period.label, ' ', h('span', { class: 'badge' }, `金額単位：${ctx.unit}`))),

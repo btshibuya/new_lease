@@ -113,6 +113,7 @@ export function renderWorksheet(ctx) {
     ? [['科目', '借手個別（アプリ計算値）', '貸手個別（アプリ計算値）', '単純合算', '個社修正', '連結修正', '連結'], ...ws.map((r) => [r.label, r.lessee, r.lessor, r.simple, r.ind, r.con, r.consol])]
     : [['科目', '借手個別（アプリ計算値）', '貸手個別（アプリ計算値）', '単純合算', ...contentCols.map((cc) => (cc.key === 'OPEN' ? cc.title : `${cc.key} ${cc.title}`)), '連結'], ...ws.map((r) => [r.label, r.lessee, r.lessor, r.simple, ...contentCols.map((cc) => r.byContent[cc.key] ?? 0), r.consol])]), 'text/csv;charset=utf-8');
   const notesCard = renderNotes(ctx);
+  const proofCards = renderProofs(ctx);
 
   return h('div', { class: 'page' },
     card('連結精算表（グループ内リース関連科目、借方＋／貸方△）',
@@ -124,7 +125,49 @@ export function renderWorksheet(ctx) {
     card('連結キャッシュ・フロー計算書の消去データ', table([
       { label: '項目', key: 'label' }, { label: '区分', key: 'section' }, { label: '個別計上額', key: 'amount', num: true, calc: cfInfo }, { label: '消去額', key: 'elim', num: true, calc: cfInfo },
     ], cf.items, { className: 'ws-table' }), h('div', { class: 'alert alert-info' }, `借手の支払と貸手の受取は連結上相殺されます（差額 ${fmt(cf.check)}）。利息の支払額の区分は会計方針 POL-09 に従います。`)),
+    ...proofCards,
     notesCard);
+}
+
+/** 税効果・非支配株主持分のプルーフ：会社別の純資産修正額 × 税率・持分比率（期首・期末）と仕訳の一致 */
+function renderProofs(ctx) {
+  const { gen, companies, pol, period } = ctx;
+  const coName = (code) => companies.find((c) => c.code === code)?.name || code;
+  const pct = (v) => `${(v * 100).toFixed(2)}%`;
+  const sumAcc = (cid, co, acc) => gen.journals.filter((j) => j.contractId === cid).flatMap((j) => j.lines).filter((l) => l.co === co && l.acc === acc).reduce((a, l) => a + l.amt, 0);
+  const taxRows = [], nciRows = [];
+  for (const r of gen.results) {
+    const c = r.contract;
+    for (const co of [...new Set([c.lesseeCo, c.lessorCo])]) {
+      const dt = (r.DT.close[co] || 0) - (r.DT.open[co] || 0);
+      if (!r.E.open[co] && !r.E.close[co] && !dt) continue;
+      taxRows.push({ contract: c.id, co: coName(co), eo: r.E.open[co] || 0, to: pct(r.rates.tO[co] || 0), dto: r.DT.open[co] || 0, ec: r.E.close[co] || 0, tc: pct(r.rates.tC[co] || 0), dtc: r.DT.close[co] || 0, chg: dt, jr: sumAcc(c.id, co, 'TAX_ADJ') + gen.journals.filter((j) => j.contractId === c.id && (j.src || j.tpl) === 'C-13' && j.tpl !== 'C-01T').flatMap((j) => j.lines).filter((l) => l.co === co && l.acc === 'RE_OPEN').reduce((a, l) => a + l.amt, 0) });
+    }
+    const L = c.lesseeCo;
+    if (r.NCI.open[L] || r.NCI.close[L] || r.cap.close) nciRows.push({ contract: c.id, co: coName(L), no: r.NCI.open[L] || 0, ro: pct(r.rates.nO[L] || 0), nc: r.NCI.close[L] || 0, rc: pct(r.rates.nC[L] || 0), cap: (r.cap.close || 0) - (r.cap.open || 0), chg: (r.NCI.close[L] || 0) - (r.NCI.open[L] || 0), jr: -gen.journals.filter((j) => j.contractId === c.id).flatMap((j) => j.lines).filter((l) => l.co === L && l.acc === 'NCI' && true).reduce((a, l) => a + l.amt, 0) - (r.NCI.open[L] || 0) });
+  }
+  const tot = (rows, f) => rows.reduce((a, x) => a + (x[f] || 0), 0);
+  const judge = (x) => h('td', null, x.chg === x.jr ? statusBadge('ok', '一致') : statusBadge('warn', `差 ${fmt(x.jr - x.chg)}`));
+  const taxTbl = table([
+    { label: '契約', key: 'contract', nowrap: true }, { label: '会社', key: 'co' },
+    { label: '期首の純資産修正額', key: 'eo', num: true }, { label: '期首税率', key: 'to' }, { label: '期首の取消額', key: 'dto', num: true },
+    { label: '期末の純資産修正額', key: 'ec', num: true }, { label: '期末税率', key: 'tc' }, { label: '期末の取消額', key: 'dtc', num: true },
+    { label: '当期の増減（期末−期首）', key: 'chg', num: true }, { label: '仕訳（法人税等調整額等）', key: 'jr', num: true }, { label: '判定', render: judge },
+  ], [...taxRows, { contract: '合計', co: '', eo: tot(taxRows, 'eo'), to: '', dto: tot(taxRows, 'dto'), ec: tot(taxRows, 'ec'), tc: '', dtc: tot(taxRows, 'dtc'), chg: tot(taxRows, 'chg'), jr: tot(taxRows, 'jr'), total: true }], { rowClass: (x) => (x.total ? 'total' : '') });
+  const nciTbl = table([
+    { label: '契約', key: 'contract', nowrap: true }, { label: '借手の会社', key: 'co' },
+    { label: '期首の非支配株主持分', key: 'no', num: true }, { label: '期首の比率', key: 'ro' },
+    { label: '期末の非支配株主持分', key: 'nc', num: true }, { label: '期末の比率', key: 'rc' },
+    { label: 'うち持分変動（資本剰余金）', key: 'cap', num: true }, { label: '当期の増減（期末−期首）', key: 'chg', num: true }, { label: '仕訳（非支配株主持分の増減）', key: 'jr', num: true }, { label: '判定', render: judge },
+  ], [...nciRows, { contract: '合計', co: '', no: tot(nciRows, 'no'), ro: '', nc: tot(nciRows, 'nc'), rc: '', cap: tot(nciRows, 'cap'), chg: tot(nciRows, 'chg'), jr: tot(nciRows, 'jr'), total: true }], { rowClass: (x) => (x.total ? 'total' : '') });
+  return [
+    h('section', { class: 'card', id: 'tax-proof' }, h('h2', null, `税効果のプルーフ（${period.label}）`),
+      h('div', { class: 'alert alert-info' }, `個別で計上した税効果の取消額＝会社別の純資産修正額（消去による連結上の純資産の増減）× 法定実効税率（繰延税金資産の側は計上割合を反映）。当期の法人税等調整額＝期末の取消額−期首の取消額（税率変更の影響を含む）。会計方針 POL-02：${pol['POL-02'] === 'reverse' ? '個別税効果を取り消す' : '税効果を認識しない'}。`),
+      taxRows.length ? taxTbl : h('p', { class: 'muted' }, '税効果の取消はありません。')),
+    h('section', { class: 'card', id: 'nci-proof' }, h('h2', null, `非支配株主持分のプルーフ（${period.label}）`),
+      h('div', { class: 'alert alert-info' }, `非支配株主持分＝（借手・貸手の税効果後の修正額の合計）× 借手の非支配株主持分比率。比率の変動による按分替えは資本剰余金（資本取引）。会計方針 POL-01：${pol['POL-01'] === 'allocate' ? '借手の比率で按分する' : '按分しない'}。`),
+      nciRows.length ? nciTbl : h('p', { class: 'muted' }, '非支配株主持分への按分はありません。')),
+  ];
 }
 
 /** 注記（新リース会計基準）：連結の注記額＝各社の注記額の合計（収集表）−グループ内リース分 */

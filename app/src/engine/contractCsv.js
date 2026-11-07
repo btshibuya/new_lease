@@ -168,7 +168,7 @@ export function importContractsCsv(text, data) {
     CONTRACT_COLUMNS.forEach((col, i) => { if (colIdx[i] >= 0) col.set(raw, r[colIdx[i]] ?? '', errs, col.label); });
     const existing = data.contracts.find((x) => x.id === raw.id);
     // 既存の契約を上書きする場合、CSV にない項目（条件変更・実績）は引き継ぐ
-    const merged = existing ? { ...raw, modifications: existing.modifications, actuals: existing.actuals, lessee: { ...existing.lessee, ...raw.lessee }, lessor: { ...existing.lessor, ...raw.lessor } } : raw;
+    const merged = existing ? { ...raw, modifications: existing.modifications, actuals: existing.actuals, paymentOverrides: existing.paymentOverrides, lessee: { ...existing.lessee, ...raw.lessee }, lessor: { ...existing.lessor, ...raw.lessor } } : raw;
     const c = sanitizeContract(merged);
     if (seen.has(c.id)) errs.push(`契約番号「${c.id}」がファイル内で重複しています（${seen.get(c.id)}行目）`);
     if (raw.lessee.rate !== null && raw.lessee.rate > 0 && raw.lessee.rate < 0.001) errs.push('借手：割引率が0.1％未満です。％の数値（例：2.5）で入力してください');
