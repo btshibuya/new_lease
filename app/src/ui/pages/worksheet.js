@@ -1,9 +1,15 @@
-import { h, card, table, amt, statusBadge, download, ask, toast } from '../dom.js';
+import { h, card, table, amt, statusBadge, download, ask, toast, select } from '../dom.js';
 import { COLORS } from '../components.js';
 import { waterfall, barChart } from '../charts.js';
 import { worksheet, MUST_BE_ZERO, cashFlowEliminations } from '../../engine/reports.js';
 import { NOTE_SECTIONS, BUCKETS, groupNoteAmounts, consolidatedNotes, noteCollectionCsv, importNoteCollection, notePeriodKey } from '../../engine/notes.js';
 import { update } from '../store.js';
+import { focusJournals } from './journals.js';
+import { contentOrder } from '../components.js';
+
+// 列の粒度：kind＝区分別（個社修正・連結修正）、content＝内容別（開始仕訳も内容別）、content_open＝内容別（開始仕訳・洗替はまとめる）
+const view = { gran: 'kind' };
+const GRANS = [['kind', '区分別（個社修正・連結修正）'], ['content_open', '内容別（開始仕訳はまとめる）'], ['content', '内容別（開始仕訳も内容別）']];
 import { ACCOUNTS } from '../../engine/accounts.js';
 import { TEMPLATES } from '../../engine/elimination.js';
 import { toCsv } from '../../engine/data.js';
@@ -31,16 +37,42 @@ export function renderWorksheet(ctx) {
       sources: [{ label: '契約・スケジュール' }, { label: '仕訳', kind: 'journal' }],
     };
   };
+  // 内容別の列：仕訳の内容ごとに集計（開始仕訳・洗替をまとめるかは粒度の設定による）
+  const colKeyOf = (x) => (view.gran === 'content_open' && x.tpl && (x.tpl.startsWith('C-01') || x.tpl === 'M-01O') ? 'OPEN' : x.content);
+  const contentCols = [];
+  if (view.gran !== 'kind') {
+    const seen = new Map();
+    for (const r of ws) for (const x of r.items) if (x.col === 'ind' || x.col === 'con') {
+      const k = colKeyOf(x);
+      if (!seen.has(k)) seen.set(k, { key: k, kind: x.col, tpl: k === 'OPEN' ? 'C-01' : x.tpl, src: k === 'OPEN' ? '' : x.srcTpl, title: k === 'OPEN' ? '開始仕訳・洗替（前期末からの繰越）' : x.contentTitle });
+    }
+    contentCols.push(...[...seen.values()].sort((p, q) => (p.kind === q.kind ? contentOrder(p, q) : p.kind === 'ind' ? -1 : 1)));
+    for (const r of ws) { r.byContent = {}; for (const x of r.items) if (x.col === 'ind' || x.col === 'con') { const k = colKeyOf(x); r.byContent[k] = (r.byContent[k] || 0) + x.amt; } }
+  }
+  const links = (r, contentKey) => [
+    { label: `元帳（${r.label}）`, go: () => focusJournals({ account: r.label }) },
+    ...(contentKey && contentKey !== 'OPEN' ? [{ label: `仕訳帳（${contentKey.replace(':', '・')}）`, go: () => focusJournals({ content: contentKey }) }] : contentKey === 'OPEN' ? [{ label: '仕訳帳（開始仕訳・洗替）', go: () => focusJournals({ content: 'OPEN' }) }] : [{ label: '仕訳帳（すべて）', go: () => focusJournals({}) }]),
+  ];
+  const contentInfo = (r, cc) => () => {
+    const items = r.items.filter((x) => (x.col === 'ind' || x.col === 'con') && colKeyOf(x) === cc.key && x.amt);
+    return { context: `連結精算表・${period.label}（借方＋／貸方△）`, title: `${r.label}：${cc.key === 'OPEN' ? '' : `${cc.key.replace(':', '・')} `}${cc.title}`, value: r.byContent[cc.key] || 0,
+      breakdown: { title: `内訳（${items.length}件）`, cols: [{ label: '契約', key: 'contract' }, { label: '元の仕訳', key: 'src' }, { label: '金額', key: 'amt', num: true }], rows: [...items, { contract: '合計', src: '', amt: items.reduce((a, x) => a + x.amt, 0), total: true }] },
+      sources: [{ label: '仕訳', kind: 'journal' }], links: links(r, cc.key) };
+  };
+  const withLinks = (fn, r, key) => () => ({ ...fn(), links: links(r, null) });
   const cols = [
     { label: '科目', render: (r) => h('td', null, r.label, MUST_BE_ZERO.includes(r.acc) ? h('span', { class: 'co' }, 'グループ内：連結後0') : null) },
     { label: '借手個別（アプリ計算値）', num: true, key: 'lessee', calc: (r) => cellInfo(r, 'lessee')() },
     { label: '貸手個別（アプリ計算値）', num: true, key: 'lessor', calc: (r) => cellInfo(r, 'lessor')() },
     { label: '単純合算', num: true, key: 'simple', calc: (r) => cellInfo(r, 'simple')() },
-    { label: '個社修正', num: true, key: 'ind', calc: (r) => cellInfo(r, 'ind')() },
-    { label: '連結修正', num: true, key: 'con', calc: (r) => cellInfo(r, 'con')() },
-    { label: '連結', render: (r) => amt(r.consol, { strong: true, calc: cellInfo(r, 'consol') }) },
+    ...(view.gran === 'kind' ? [
+      { label: '個社修正', num: true, key: 'ind', calc: (r) => withLinks(cellInfo(r, 'ind'), r)() },
+      { label: '連結修正', num: true, key: 'con', calc: (r) => withLinks(cellInfo(r, 'con'), r)() },
+    ] : contentCols.map((cc) => ({ label: cc.key === 'OPEN' ? '開始仕訳・洗替' : `${cc.key.replace(':', '・')} ${cc.title.replace(/^開始仕訳：/, '開始：').replace(/^洗替：/, '洗替：').replace(/（.*$/, '').slice(0, 14)}`, title: cc.title, num: true, render: (r) => r.byContent[cc.key] ?? null, calc: (r) => contentInfo(r, cc)() }))),
+    { label: '連結', render: (r) => amt(r.consol, { strong: true, calc: withLinks(cellInfo(r, 'consol'), r) }) },
     { label: '判定', render: (r) => h('td', null, MUST_BE_ZERO.includes(r.acc) ? (r.consol === 0 ? statusBadge('ok', '0') : statusBadge('ng', '残高あり')) : '') },
   ];
+  const granSel = h('label', null, '列の粒度 ', select(GRANS, view.gran, (v) => { view.gran = v; window.dispatchEvent(new HashChangeEvent('hashchange')); }));
   const bs = ws.filter((r) => r.type === 'BS');
   const pl = ws.filter((r) => r.type === 'PL');
 
@@ -55,7 +87,7 @@ export function renderWorksheet(ctx) {
       if (ACCOUNTS[l.acc]?.type !== 'PL') continue;
       if (l.acc === 'TAX_ADJ') tax -= l.amt;
       else if (l.acc === 'NCI_PL') nciPl -= l.amt;
-      else byTpl.set(j.tpl, (byTpl.get(j.tpl) || 0) - l.amt);
+      else byTpl.set(j.src || j.tpl, (byTpl.get(j.src || j.tpl) || 0) - l.amt); // 洗替・開始仕訳は元の内容に含める
     }
   }
   for (const [t, v] of byTpl) if (v) steps.push({ label: `${t} ${TEMPLATES[t]?.title.replace(/（.*）/, '') || ''}`, value: v, basis: TEMPLATES[t]?.title });
@@ -77,13 +109,15 @@ export function renderWorksheet(ctx) {
       notes: ['利息の支払額は、支払ったリース料をまず未払の利息に充て、残りを元本の返済とみなして計算します（フリーレント期間の利息は次の支払で支払われます）。'],
       sources: [{ label: '契約のリース料' }, { label: '返済スケジュール' }] };
   };
-  const exportWs = () => download(`連結精算表_${period.label}.csv`, toCsv([['科目', '借手個別（アプリ計算値）', '貸手個別（アプリ計算値）', '単純合算', '個社修正', '連結修正', '連結'], ...ws.map((r) => [r.label, r.lessee, r.lessor, r.simple, r.ind, r.con, r.consol])]), 'text/csv;charset=utf-8');
+  const exportWs = () => download(`連結精算表_${period.label}.csv`, toCsv(view.gran === 'kind'
+    ? [['科目', '借手個別（アプリ計算値）', '貸手個別（アプリ計算値）', '単純合算', '個社修正', '連結修正', '連結'], ...ws.map((r) => [r.label, r.lessee, r.lessor, r.simple, r.ind, r.con, r.consol])]
+    : [['科目', '借手個別（アプリ計算値）', '貸手個別（アプリ計算値）', '単純合算', ...contentCols.map((cc) => (cc.key === 'OPEN' ? cc.title : `${cc.key} ${cc.title}`)), '連結'], ...ws.map((r) => [r.label, r.lessee, r.lessor, r.simple, ...contentCols.map((cc) => r.byContent[cc.key] ?? 0), r.consol])]), 'text/csv;charset=utf-8');
   const notesCard = renderNotes(ctx);
 
   return h('div', { class: 'page' },
     card('連結精算表（グループ内リース関連科目、借方＋／貸方△）',
       h('div', { class: 'alert alert-info' }, '個別の金額はアプリの計算値です（個別帳簿との一致は「検算 CHK-10」で確認）。「グループ内：連結後0」の科目が0になっていれば消去は完全です。'),
-      h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', on: { click: exportWs } }, '表を書き出す（CSV）')),
+      h('div', { class: 'actions' }, granSel, h('button', { class: 'btn', type: 'button', on: { click: exportWs } }, '表を書き出す（CSV）'), h('span', { class: 'muted small' }, '金額を押すと内訳を表示し、元帳・仕訳帳へ移動できます。')),
       h('h3', null, '貸借対照表'), table(cols, bs, { className: 'ws-table' }),
       h('h3', null, '損益計算書'), table(cols, pl, { className: 'ws-table' })),
     card(null, waterfall({ wide: true, title: '損益のブリッジ：単純合算 → 連結（税引前）→ 税引後 → 親会社株主帰属（グループ内リース関連）', subtitle: '各棒にカーソルを合わせると内容を表示。連結（税引前）に残るのは主に貸手資産の減価償却費（組替後）', steps, unit })),

@@ -59,11 +59,9 @@ export function renderDashboard(ctx) {
   const rseries = fyList.map((p) => scheds.reduce((a, [, sc]) => a + balAt(sc, p.end, (r) => (r.lessee.cost_end || 0) - (r.lessee.acc_end || 0)), 0));
   const eseries = fyList.map((p) => scheds.reduce((a, [, sc]) => a + eAt(sc, p.end), 0));
   const perId = new Map(scheds.map(([id, sc]) => [id, fyList.map((p) => eAt(sc, p.end) - eAt(sc, p.start - 1))]));
-  const ids = [...perId.keys()];
-  const top = ids.slice(0, 7);
-  const series = top.map((id, i) => ({ name: id, values: perId.get(id), color: SERIES[i % 8] }));
-  if (ids.length > 7) series.push({ name: 'その他', values: labels.map((_, k) => ids.slice(7).reduce((a, id) => a + perId.get(id)[k], 0)), color: 'var(--s8)' });
-  const plChart = barChart({ wide: true, title: '年度別：消去による連結損益への影響（税引前・契約別積上げ）', subtitle: '借手の費用（償却費＋利息）が逓減するため、前半は利益増加（＋）、後半は減少（△）となり、各契約の終了時に累計0に戻ります', labels, series, stacked: true, unit: ctx.unit });
+  // 契約が多くても見やすいよう、契約別には分けず全契約の合計で表示する（契約別の内訳は「表で見る」・契約画面で確認）
+  const plTotal = fyList.map((_, k) => [...perId.values()].reduce((a, v) => a + v[k], 0));
+  const plChart = barChart({ wide: true, title: '年度別：消去による連結損益への影響（税引前・全契約の合計）', subtitle: '借手の費用（償却費＋利息）が逓減するため、前半は利益増加（＋）、後半は減少（△）となり、契約の終了時に累計0に戻ります。契約ごとの内訳は契約の画面で確認できます', labels, series: [{ name: '連結損益への影響（税引前）', values: plTotal, color: COLORS.diff }], unit: ctx.unit });
   const balChart = lineChart({ title: '年度末：消去するリース負債と使用権資産簿価（全契約）', subtitle: '2本の線の差が「消去差額」。差は小さいため、右の「消去差額の推移」で拡大表示しています', labels, series: [{ name: 'リース負債', values: lseries, color: COLORS.lessee }, { name: '使用権資産簿価', values: rseries, color: COLORS.lessor, dashed: true }], unit: ctx.unit });
   const diffChart = barChart({ title: '年度末：消去差額（純資産修正額）の推移（全契約）', subtitle: '＝リース負債＋未払−使用権資産簿価−貸手の未収。連結上の利益剰余金（税引前）への累積影響', labels, series: [{ name: '消去差額（累計）', values: eseries, color: COLORS.diff }], unit: ctx.unit });
 

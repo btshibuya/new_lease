@@ -166,6 +166,9 @@ input[type=number] { text-align: right; font-variant-numeric: tabular-nums; }
 label.btn { display: inline-flex; align-items: center; }
 .empty { color: var(--sub); padding: 16px; text-align: center; border: 1px dashed var(--line); border-radius: 8px; background: var(--surface); }
 .filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.filters label { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0; }
+.filters label select { min-width: 0; max-width: min(420px, calc(100vw - 110px)); }
+.table-wrap { overflow-x: auto; max-width: 100%; }
 .grid2 > .card { margin: 0; min-width: 0; }
 
 /* ── 入力欄（form-grid：ラベル＋入力欄＋出典） ── */
@@ -199,6 +202,20 @@ legend { font-weight: 700; color: var(--navy); padding: 0 6px; }
 /* 仕訳カードの表は列幅をそろえる（科目は広く、金額は同じ幅） */
 .tbl.journal { table-layout: fixed; width: 100%; }
 .tbl.journal th:nth-child(2), .tbl.journal th:nth-child(4) { width: 140px; }
+.journal-card.compact { padding: 8px 10px; margin: 6px 0; }
+.journal-m-wrap { display: none; }
+.tbl.journal-m { table-layout: fixed; width: 100%; font-size: 12.5px; }
+.tbl.journal-m th:nth-child(2), .tbl.journal-m th:nth-child(3) { width: 84px; }
+.tbl.journal-m th, .tbl.journal-m td { padding: 5px 6px; }
+.journal-card .drill summary, .drill-pair summary { cursor: pointer; color: var(--navy-2); }
+.drill-pair { margin: 6px 0 6px 12px; }
+.drill-sub { margin-left: 10px; }
+.next-open { display: flex; flex-direction: column; gap: 4px; }
+.carry-card > summary { cursor: pointer; list-style-position: inside; }
+.tbl tr.warn-row td { background: #fff4f4; }
+.tbl.sum-table th, .tbl.sum-table td { min-width: 96px; }
+.tbl.sum-table th:first-child, .tbl.sum-table td:first-child { min-width: 220px; position: sticky; left: 0; background: var(--surface); z-index: 1; }
+.tbl.sum-table thead th:first-child { background: var(--soft); }
 .journal-card { background: var(--surface); border: 1px solid var(--line-2); border-radius: 8px; padding: 12px; min-width: 0; }
 .journal-card header { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin-bottom: 8px; }
 .tpl { font-size: 11px; font-weight: 700; border-radius: 10px; padding: 1px 8px; background: var(--soft-2); color: var(--navy-2); white-space: nowrap; }
@@ -316,6 +333,16 @@ td.hl, .hl:not(rect) { fill: initial; }
   .form-grid { grid-template-columns: 1fr; }
   .fg-input .row { flex-wrap: wrap; }
   .kpi { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  /* スマホ：仕訳は1行に1科目の表（科目｜借方｜貸方）に切り替える */
+  .journal-card .tbl-wrap:has(> .tbl.journal) { display: none; }
+  .journal-m-wrap { display: block; }
+  /* スマホ：仕訳の表は金額の列を狭くして、科目の列を広く */
+  .tbl.journal { font-size: 12.5px; }
+  .tbl.journal th:nth-child(2), .tbl.journal th:nth-child(4) { width: 76px; }
+  .tbl.journal th, .tbl.journal td { padding: 5px 6px; }
+  .tbl.journal .co { display: block; margin: 2px 0 0; width: fit-content; }
+  .tbl.ws-table th:first-child, .tbl.ws-table td:first-child { width: 150px; min-width: 150px; max-width: 150px; position: sticky; left: 0; background: var(--surface); z-index: 1; }
+  .tbl.ws-table th, .tbl.ws-table td { width: 92px; min-width: 92px; max-width: 92px; }
   .kpi .k { padding: 8px 10px; }
   .app-header { padding: 6px 12px; row-gap: 4px; }
   .menu-btn { order: 0; }

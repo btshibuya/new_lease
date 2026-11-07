@@ -56,7 +56,8 @@ test('設例（要件定義書 第10章）のスケジュールが期待値と�
 test('設例：1年目・2年目の連結修正仕訳が要件定義書と一致', () => {
   const d = { ...data, contracts: [k001] };
   const g1 = generateAll(d, FY[0], pol);
-  const t = (g, tpl) => g.journals.find((j) => j.tpl === tpl);
+  // 開始仕訳は内容別に分かれるため、同じテンプレートの仕訳を合算して比べる
+  const t = (g, tpl) => ({ lines: g.journals.filter((j) => j.tpl === tpl).flatMap((j) => j.lines) });
   assert.deepEqual(net(t(g1, 'C-02')), { LL_NC: 4580, ROU_COST: -4580 });
   assert.deepEqual(net(t(g1, 'C-03')), { ROU_ACC: 916, DEP_ROU: -916 });
   assert.deepEqual(net(t(g1, 'C-04')), { LL_NC: -863, INT: -137, LEASE_INC: 1000 });

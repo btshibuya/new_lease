@@ -146,6 +146,14 @@ export function sanitizeContract(c) {
 /**
  * 取込データ全体の検証。例外を投げずに { data, warnings } を返す。
  */
+/** 連結修正仕訳の繰越設定（内容別）。未知の内容・値は捨てる（初期値はエンジンが持つ） */
+export function sanitizeCarry(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const k of ['C-02', 'C-03', 'C-04', 'C-20', 'C-17', 'C-13', 'C-14', 'C-10', 'C-11']) if (['carry_reverse', 'carry', 'none'].includes(raw[k])) out[k] = raw[k];
+  return out;
+}
+
 export function sanitizeData(raw) {
   const warnings = [];
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('データ形式が不正です（JSONオブジェクトではありません）');
@@ -215,7 +223,7 @@ export function sanitizeData(raw) {
   return {
     data: {
       version: 1,
-      config: { unit: str(cfg.unit || '千円', 10), fyeMonth: int(cfg.fyeMonth, 3, { min: 1, max: 12 }), accountNames },
+      config: { unit: str(cfg.unit || '千円', 10), fyeMonth: int(cfg.fyeMonth, 3, { min: 1, max: 12 }), accountNames, carry: sanitizeCarry(cfg.carry) },
       companies,
       contracts,
       notes,

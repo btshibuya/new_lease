@@ -15,7 +15,7 @@ function item(id, title, status, detail, rows = [], independence = '') {
   return { id, title, status, detail, rows, independence };
 }
 
-const FLOW_TPLS = new Set(['C-01', 'C-02', 'C-03', 'C-04', 'C-20', 'C-17', 'C-B']);
+const FLOW_TPLS = new Set(['C-01', 'C-02', 'C-03', 'C-04', 'C-20', 'C-17', 'C-B']); // 開始仕訳・洗替は src（元の内容）で判定
 const TAX_TPLS = new Set(['C-01T', 'C-13', 'C-BT']);
 const NCI_TPLS = new Set(['C-01N', 'C-14', 'C-BN']);
 
@@ -163,7 +163,8 @@ function expectedFlowNet(r, pol, period) {
 function netOf(journals, tplSet, cid) {
   const m = new Map();
   for (const j of journals) {
-    if (!tplSet.has(j.tpl) || j.contractId !== cid) continue;
+    // 開始仕訳・洗替は元の内容（src）で判定する
+    if (!tplSet.has(j.src || j.tpl) || j.contractId !== cid) continue;
     for (const l of j.lines) {
       const acc = l.acc === 'LL_C' ? 'LL_NC' : l.acc;
       m.set(`${acc}|${l.co}`, (m.get(`${acc}|${l.co}`) || 0) + l.amt);
@@ -459,7 +460,7 @@ export function runChecks(data, period, pol, gen, names = {}, opts = {}) {
         const after = c.timing === 'advance' ? (sched.byIndex(last - 1)?.lessee.L_end || 0) - pays.get(last) : sched.byIndex(last)?.lessee.L_end || 0;
         expCur = endRec.lessee.L_end - after;
       }
-      const c10 = gen.journals.filter((j) => j.tpl === 'C-10' && j.contractId === c.id).flatMap((j) => j.lines).filter((l) => l.acc === 'LL_C').reduce((a, l) => a + l.amt, 0);
+      const c10 = gen.journals.filter((j) => (j.src || j.tpl) === 'C-10' && j.contractId === c.id).flatMap((j) => j.lines).filter((l) => l.acc === 'LL_C').reduce((a, l) => a + l.amt, 0);
       if (c10 !== expCur) cp.push({ contract: c.id, message: `流動部分：月次残高から ${fmt(expCur)}（${last !== null ? `${indexToJp(last)}の支払直後の残高との差` : '1年以内の支払なし'}）≠ 仕訳 ${fmt(c10)}` });
     }
     return item('CHK-14', 'リース負債の流動部分の独立計算（決算日後1年以内）', cp.length ? NG : OK, cp.length ? `${cp.length}契約で不一致` : '月次の残高推移から独立に求めた流動部分と C-10 の金額が一致', cp, '別経路で計算');

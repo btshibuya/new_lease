@@ -18,6 +18,7 @@ const st = { el: null, stack: [], anchors: [] };
  *   drill: { title, rows:[{ label, value, expr, src, children:[...] }] },   // 計算過程のドリルダウン
  *   notes: ['...'],                    // 補足
  *   sources: [{ label, kind }]         // 出典（kind: journal / manual / carry）
+ *   links: [{ label, go }]             // 関連する画面へのリンク（元帳・仕訳帳など）
  * }
  */
 export function mountPanel(el) {
@@ -117,6 +118,10 @@ function render() {
   if (info.notes && info.notes.length) el.append(h('ul', { class: 'small sub calc-notes' }, info.notes.map((n) => h('li', null, n))));
   if (info.sources && info.sources.length) {
     el.append(h('h3', null, '出典'), h('div', { class: 'row' }, info.sources.map((s) => h('span', { class: `src ${s.kind || ''}` }, s.label))));
+  }
+  // 関連する画面へのリンク（元帳・仕訳帳など）
+  if (info.links && info.links.length) {
+    el.append(h('h3', null, '関連する画面で見る'), h('div', { class: 'actions' }, info.links.map((x) => h('button', { class: 'btn btn-sm', type: 'button', on: { click: () => { closeCalc(); x.go(); } } }, `${x.label} →`))));
   }
 }
 

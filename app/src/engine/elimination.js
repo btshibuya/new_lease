@@ -12,6 +12,7 @@ export const TEMPLATES = {
   'C-01': { kind: 'CON', title: '開始仕訳（前期末までの累計の引継）' },
   'C-01T': { kind: 'CON', title: '開始仕訳（税効果）' },
   'C-01N': { kind: 'CON', title: '開始仕訳（非支配株主持分）' },
+  'C-01R': { kind: 'CON', title: '洗替（前期末の開始仕訳の戻し）' },
   'C-02': { kind: 'CON', title: '新規契約（リース開始）の消去' },
   'C-03': { kind: 'CON', title: '使用権資産の減価償却費の消去' },
   'C-04': { kind: 'CON', title: 'リース料（利息・元本返済・受取リース料）の消去' },
@@ -28,6 +29,39 @@ export const TEMPLATES = {
   'M-01': { kind: 'CON', title: '手入力仕訳' },
   'M-01O': { kind: 'CON', title: '手入力仕訳（前期以前分の開始仕訳）' },
 };
+
+/**
+ * 連結修正仕訳の翌期への繰越方法（内容別）。
+ * carry_reverse：繰越あり－洗替あり（前期末の残高を開始仕訳で引き継ぎ、当期首に洗い替えて、期末に全額を計上し直す）
+ * carry：繰越あり－洗替なし（前期末の残高を開始仕訳で引き継ぎ、当期は増減だけを計上する）
+ * none：繰越なし（開始仕訳を作らない。期末に当期分だけを計上する）
+ * re：翌期の利益剰余金に影響するか（影響する内容を「繰越なし」にすると、翌期の利益剰余金期首が連結上正しくならない）
+ */
+export const CARRY_MODES = { carry_reverse: '繰越あり－洗替あり', carry: '繰越あり－洗替なし', none: '繰越なし' };
+export const CARRY_DEFS = [
+  { tpl: 'C-02', default: 'carry', re: true, why: 'リース開始時の取消。初期直接費用・前払リース料・適用時の累積的影響額があると、利益剰余金に影響します。' },
+  { tpl: 'C-03', default: 'carry', re: true, why: '減価償却費の取消は損益に影響し、その累計は翌期の利益剰余金期首になります。' },
+  { tpl: 'C-04', default: 'carry', re: true, why: '支払利息・受取リース料の取消は損益に影響し、その累計は翌期の利益剰余金期首になります。' },
+  { tpl: 'C-20', default: 'carry', re: true, why: '条件変更の損益の取消は、翌期の利益剰余金期首に影響します。' },
+  { tpl: 'C-17', default: 'carry', re: true, why: '解約損益・違約金の取消は、翌期の利益剰余金期首に影響します。' },
+  { tpl: 'C-13', default: 'carry', re: true, why: '法人税等調整額は損益に影響し、繰延税金資産（負債）の残高を引き継ぐ必要があります。' },
+  { tpl: 'C-14', default: 'carry', re: true, why: '非支配株主に帰属する損益は、翌期の利益剰余金期首・非支配株主持分に影響します。' },
+  { tpl: 'C-10', default: 'none', re: false, why: '貸借対照表の科目どうしの組替のため、期末ごとに組み替え直します（利益剰余金に影響しません）。' },
+  { tpl: 'C-11', default: 'none', re: false, why: '貸借対照表の科目どうしの組替のため、期末ごとに組み替え直します（利益剰余金に影響しません）。' },
+  { tpl: 'C-12', default: 'none', re: false, fixed: true, why: '損益計算書の科目どうしの組替で、残高が残らないため繰り越しません（変更不可）。' },
+];
+/** 繰越方法の取得（設定がなければ初期値） */
+export function carryModeOf(cfg, tpl) {
+  const def = CARRY_DEFS.find((d) => d.tpl === tpl);
+  if (!def) return 'carry';
+  if (def.fixed) return def.default;
+  const v = cfg && cfg[tpl];
+  return CARRY_MODES[v] ? v : def.default;
+}
+/** 翌期の利益剰余金に影響する内容を「繰越なし」にしている設定の警告 */
+export function carryWarnings(cfg) {
+  return CARRY_DEFS.filter((d) => d.re && carryModeOf(cfg, d.tpl) === 'none').map((d) => `${d.tpl} ${TEMPLATES[d.tpl].title}：翌期の利益剰余金に影響する仕訳を「繰越なし」にしています。翌期の開始仕訳に引き継がれないため、翌期の連結上の利益剰余金期首・残高が正しくなりません（検算 CHK-05 等が NG になります）。`);
+}
 
 function ln(acc, co, amt, meta, basis) {
   return { acc, co, amt, meta, basis };
@@ -238,6 +272,7 @@ export function taxOf(C, e, t, pol, R) {
  */
 export function contractJournals(c, period, ctx) {
   const { pol, companies } = ctx;
+  const carryCfg = ctx.carry || {};
   const coMap = Object.fromEntries(companies.map((x) => [x.code, x]));
   const sched = ctx.schedCache?.get(c.id) || buildSchedule(c, pol, { lesseeCompany: coMap[c.lesseeCo] });
   const meta = metaOf(c);
@@ -354,28 +389,40 @@ export function contractJournals(c, period, ctx) {
     }
   }
 
-  // ── 組替 ──
+  // ── 組替（期末残高型：任意の期末で計算できるようにし、繰越の設定に使う） ──
   const endRec = sched.byIndex(period.end);
   const activeAtEnd = !!endRec && endRec.lessee.active && !endRec.lessee.term;
   const cur = activeAtEnd ? currentPortion(sched, period.end) : 0;
-  const c10 = cur ? [
-    ln('LL_C', c.lesseeCo, cur, meta, `借手の流動部分＝期末残高 ${fmt(endRec.lessee.L_end)} − 決算日後1年以内の最終支払直後の残高`),
-    ln('LL_NC', c.lesseeCo, -cur, meta, '固定で一括消去した額のうち流動部分を振替'),
-  ] : [];
   const r = c.lessor || {};
   const ratio = r.ratio ?? 1;
-  const c11 = [];
-  const leaseOngoingAtEnd = !!endRec && !endRec.lessee.term;
-  if (pol['POL-04'] === 'reclass' && r.assetCost > 0 && leaseOngoingAtEnd) {
-    const cost = R(r.assetCost * ratio);
-    const acc = R(endRec.lessor.assetAcc_end * ratio);
-    c11.push(ln('RECLASS_ASSET', 'CONSOL', cost, meta, `貸手資産の取得原価 ${fmt(r.assetCost)} × 按分比率 ${pct(ratio)}`));
-    c11.push(ln('RENTAL_ASSET', c.lessorCo, -cost, meta, '貸手の賃貸資産'));
-    if (acc) {
-      c11.push(ln('RENTAL_ACC', c.lessorCo, acc, meta, `貸手の減価償却累計額 ${fmt(endRec.lessor.assetAcc_end)} × 按分比率 ${pct(ratio)}`));
-      c11.push(ln('RECLASS_ACC', 'CONSOL', -acc, meta, '連結上の自己使用資産の減価償却累計額'));
+  const c10At = (idx) => {
+    if (idx < sched.meta.firstIdx) return [];
+    const er = sched.byIndex(idx);
+    const act = !!er && er.lessee.active && !er.lessee.term;
+    const cu = act ? currentPortion(sched, idx) : 0;
+    return cu ? [
+      ln('LL_C', c.lesseeCo, cu, meta, `借手の流動部分＝期末残高 ${fmt(er.lessee.L_end)} − 決算日後1年以内の最終支払直後の残高（${indexToJp(idx)}末）`),
+      ln('LL_NC', c.lesseeCo, -cu, meta, '固定で一括消去した額のうち流動部分を振替'),
+    ] : [];
+  };
+  const c11At = (idx) => {
+    const out = [];
+    if (idx < sched.meta.firstIdx) return out;
+    const er = sched.byIndex(idx);
+    if (pol['POL-04'] === 'reclass' && r.assetCost > 0 && !!er && !er.lessee.term) {
+      const cost = R(r.assetCost * ratio);
+      const acc = R(er.lessor.assetAcc_end * ratio);
+      out.push(ln('RECLASS_ASSET', 'CONSOL', cost, meta, `貸手資産の取得原価 ${fmt(r.assetCost)} × 按分比率 ${pct(ratio)}`));
+      out.push(ln('RENTAL_ASSET', c.lessorCo, -cost, meta, '貸手の賃貸資産'));
+      if (acc) {
+        out.push(ln('RENTAL_ACC', c.lessorCo, acc, meta, `貸手の減価償却累計額 ${fmt(er.lessor.assetAcc_end)} × 按分比率 ${pct(ratio)}（${indexToJp(idx)}末）`));
+        out.push(ln('RECLASS_ACC', 'CONSOL', -acc, meta, '連結上の自己使用資産の減価償却累計額'));
+      }
     }
-  }
+    return out;
+  };
+  const c10 = c10At(period.end);
+  const c11 = c11At(period.end);
   const c12 = [];
   if (pol['POL-05'] === 'by_lessee_dept' && r.assetCost > 0) {
     const act = sched.months.filter((x) => x.m >= period.start && x.m <= period.end && x.m >= sched.meta.start);
@@ -385,6 +432,17 @@ export function contractJournals(c, period, ctx) {
       c12.push(ln('RENTAL_DEP', c.lessorCo, -dep, meta, '貸手の減価償却費（賃貸原価等）'));
     }
   }
+  const neg = (lines, why) => lines.map((l) => ({ ...l, amt: -l.amt, basis: why || `洗替：${l.basis || ''}` }));
+  // 開始仕訳（内容別）：前期末までの累計の貸借対照表科目＋会社別の利益剰余金期首
+  const openingOf = (lines, src) => {
+    const bs = lines.filter((l) => isBS(l.acc));
+    const out = [...bs];
+    for (const co of [...new Set(bs.map((l) => l.co))]) {
+      const re = -bs.filter((l) => l.co === co).reduce((a, l) => a + l.amt, 0);
+      if (re) out.push(ln('RE_OPEN', co, re, meta, `${TEMPLATES[src].title}の前期末までの損益の累計（${nm(co)}）＝利益剰余金期首`));
+    }
+    return out;
+  };
 
   if ((pol['POL-03'] || 'opening_flow') === 'balance') {
     for (const [tpl, lines] of [['C-B', [...opening, ...inPeriod]], ['C-BT', [...openingT, ...taxLines]], ['C-BN', [...openingN, ...nciLines]]]) {
@@ -392,24 +450,48 @@ export function contractJournals(c, period, ctx) {
       if (j) jr.push(j);
     }
   } else {
-    for (const [tpl, lines] of [['C-01', opening], ['C-01T', openingT], ['C-01N', openingN]]) {
-      const j = mk(tpl, lines);
-      if (j) jr.push(j);
-    }
+    // 内容別に、繰越の設定に従って「開始仕訳」「洗替」「当期の仕訳」を作る
+    const push = (j) => { if (j) jr.push(j); };
+    const openMk = (tpl, src, lines) => mk(tpl, lines, { src, id: `${period.label}-${c.id}-${tpl}-${src}`, title: `開始仕訳：${TEMPLATES[src].title}` });
+    const revMk = (src, lines) => mk('C-01R', lines, { src, id: `${period.label}-${c.id}-C-01R-${src}`, title: `洗替：${TEMPLATES[src].title}（前期末の開始仕訳の戻し）` });
     for (const tpl of ['C-02', 'C-03', 'C-04', 'C-20', 'C-17']) {
-      if (byTpl[tpl]) {
-        const j = mk(tpl, byTpl[tpl], { details: monthDetails.filter((d) => d.tpl === tpl) });
-        if (j) jr.push(j);
-      }
+      const P = cumBefore.filter((l) => l.tpl === tpl);
+      const Q = byTpl[tpl] || [];
+      const mode = carryModeOf(carryCfg, tpl);
+      const det = { details: monthDetails.filter((d) => d.tpl === tpl) };
+      if (mode === 'none') { push(mk(tpl, Q, det)); continue; }
+      push(openMk('C-01', tpl, openingOf(P, tpl)));
+      if (mode === 'carry_reverse') { push(revMk(tpl, neg(P))); push(mk(tpl, [...P, ...Q], { ...det, full: true })); } else push(mk(tpl, Q, det));
     }
-    for (const [tpl, lines] of [['C-13', taxLines], ['C-14', nciLines]]) {
+    // 税効果：前期末の残高（会社別の繰延税金資産（負債）の取消額）
+    const Ptax = cos.flatMap((co) => (res.DTo[co] ? [ln('DTA', co, -res.DTo[co], meta, `前期末の繰延税金資産（負債）の取消（${nm(co)}）`), ln('TAX_ADJ', co, res.DTo[co], meta, `前期末までの法人税等調整額の累計（${nm(co)}）`)] : []));
+    {
+      const mode = carryModeOf(carryCfg, 'C-13');
+      if (mode !== 'none') push(openMk('C-01T', 'C-13', openingT));
+      if (mode === 'carry_reverse') { push(revMk('C-13', neg(Ptax))); push(mk('C-13', [...Ptax, ...taxLines], { full: true })); } else push(mk('C-13', taxLines));
+    }
+    // 非支配株主持分：前期末の残高
+    const L0 = c.lesseeCo;
+    const Pnci = res.Nopen[L0] || capOpen ? [ln('NCI', L0, -(res.Nopen[L0] || 0), meta, `前期末の非支配株主持分（${nm(L0)}）`), ln('NCI_PL', L0, (res.Nopen[L0] || 0) - capOpen, meta, '前期末までの非支配株主に帰属する損益の累計'), ...(capOpen ? [ln('CAP_SURPLUS', L0, capOpen, meta, '前期末までの持分変動の累計')] : [])] : [];
+    {
+      const mode = carryModeOf(carryCfg, 'C-14');
+      if (mode !== 'none') push(openMk('C-01N', 'C-14', openingN));
+      if (mode === 'carry_reverse') { push(revMk('C-14', neg(Pnci))); push(mk('C-14', [...Pnci, ...nciLines], { full: true })); } else push(mk('C-14', nciLines));
+    }
+    // 期末残高型の組替（C-10・C-11）：前期末の組替額を引き継ぐ場合は、開始仕訳（貸借対照表科目のみ）を作る
+    for (const [tpl, full, prev] of [['C-10', c10, c10At(period.start - 1)], ['C-11', c11, c11At(period.start - 1)]]) {
+      const mode = carryModeOf(carryCfg, tpl);
+      if (mode === 'none' || !prev.length) { push(mk(tpl, full)); continue; }
+      push(openMk('C-01', tpl, prev));
+      if (mode === 'carry_reverse') { push(revMk(tpl, neg(prev))); push(mk(tpl, full, { full: true })); } else push(mk(tpl, [...full, ...neg(prev, '前期末の組替額（開始仕訳で引継済み）を差し引く')]));
+    }
+    push(mk('C-12', c12));
+  }
+  if ((pol['POL-03'] || 'opening_flow') === 'balance') {
+    for (const [tpl, lines] of [['C-10', c10], ['C-11', c11], ['C-12', c12]]) {
       const j = mk(tpl, lines);
       if (j) jr.push(j);
     }
-  }
-  for (const [tpl, lines] of [['C-10', c10], ['C-11', c11], ['C-12', c12]]) {
-    const j = mk(tpl, lines);
-    if (j) jr.push(j);
   }
 
   // ── 個社修正 ──
@@ -461,7 +543,7 @@ export function manualFor(data, period) {
 
 /** 全契約の仕訳を作成 */
 export function generateAll(data, period, pol, opts = {}) {
-  const ctx = { pol, companies: data.companies, schedCache: opts.schedCache };
+  const ctx = { pol, companies: data.companies, schedCache: opts.schedCache, carry: data.config?.carry || {} };
   const results = [];
   const errors = [];
   for (const c of data.contracts) {
@@ -487,4 +569,64 @@ export function netByAccount(journals, pol, names = {}, filter = () => true) {
     }
   }
   return m;
+}
+
+/**
+ * 開始仕訳の年度別トレース：開始仕訳（内容別）の金額が、前期以前のどの年度の仕訳から生じたかを年度別に分解する。
+ * 年度別の金額の合計は、開始仕訳の金額と一致する（自動テストで確認）。
+ * @param r 開始仕訳を含む期間の契約別の計算結果（generateAll の results の要素）
+ * @param j 開始仕訳（tpl が C-01／C-01T／C-01N、src が元の内容）
+ * @returns {{year:string, co:string, acc:string, amt:number, note:string}[]}
+ */
+export function openingTrace(r, j, yearPeriods, pol, companies) {
+  const coMap = Object.fromEntries(companies.map((x) => [x.code, x]));
+  const R = (v) => round(v, pol['POL-11'] || 'half_up');
+  const start = r.periodStart;
+  const yearOf = (m) => yearPeriods.find((p) => m >= p.start && m <= p.end);
+  const ys = yearPeriods.filter((p) => p.start < start);
+  const out = [];
+  const add = (year, co, acc, amt, note) => { if (amt) out.push({ year, co, acc, amt, note }); };
+  const src = j.src;
+  const meta = metaOf(r.contract);
+  if (['C-02', 'C-03', 'C-04', 'C-20', 'C-17'].includes(src)) {
+    const lines = r.cumBefore.filter((l) => l.tpl === src && isBS(l.acc));
+    const groups = new Map();
+    for (const l of lines) { const y = yearOf(l.m)?.label || '（表示期間より前）'; (groups.get(y) || groups.set(y, []).get(y)).push(l); }
+    for (const [y, ls] of groups) {
+      const agg = new Map();
+      for (const l of ls) agg.set(`${l.acc}|${l.co}`, (agg.get(`${l.acc}|${l.co}`) || 0) + l.amt);
+      for (const [k, v] of agg) { const [acc, co] = k.split('|'); add(y, co, acc, v, `${y}の ${src} ${TEMPLATES[src].title}`); }
+      for (const co of [...new Set(ls.map((l) => l.co))]) add(y, co, 'RE_OPEN', -ls.filter((l) => l.co === co).reduce((a, l) => a + l.amt, 0), `${y}の ${src} の損益（利益剰余金へ）`);
+    }
+  } else if (src === 'C-13') {
+    const cos = [...new Set([r.contract.lesseeCo, r.contract.lessorCo])];
+    const E = (co, idx) => r.cumBefore.filter((l) => l.m <= idx && l.co === co && isBS(l.acc) && !EQUITY.has(l.acc)).reduce((a, l) => a + l.amt, 0);
+    for (const co of cos) {
+      let prev = 0;
+      for (const y of ys) {
+        const idx = Math.min(y.end, start - 1);
+        const dt = taxOf(coMap[co], E(co, idx), idx, pol, R);
+        add(y.label, co, 'DTA', -(dt - prev), `${y.label}の C-13 税効果（期末の取消額 ${fmt(dt)} − 前年度末 ${fmt(prev)}）`);
+        add(y.label, co, 'RE_OPEN', dt - prev, `${y.label}の法人税等調整額（利益剰余金へ）`);
+        prev = dt;
+      }
+    }
+  } else if (src === 'C-14') {
+    const L = r.contract.lesseeCo;
+    let pN = 0, pC = 0;
+    for (const y of ys) {
+      const idx = Math.min(y.end, start - 1);
+      const n = nciAt(r.sched, coMap, pol, idx);
+      add(y.label, L, 'NCI', -(n.N - pN), `${y.label}の C-14 非支配株主持分の増減`);
+      add(y.label, L, 'CAP_SURPLUS', n.cap - pC, `${y.label}の持分変動（資本剰余金）`);
+      add(y.label, L, 'RE_OPEN', (n.N - pN) - (n.cap - pC), `${y.label}の非支配株主に帰属する損益（利益剰余金へ）`);
+      pN = n.N; pC = n.cap;
+    }
+  } else {
+    // 期末残高型の組替（C-10・C-11）：前期末の組替額をそのまま引き継ぐ
+    const y = yearOf(start - 1)?.label || '前期末';
+    for (const l of j.lines) add(y, l.co, l.acc, l.amt, `${y}末の ${src} ${TEMPLATES[src].title}`);
+  }
+  void meta;
+  return out;
 }

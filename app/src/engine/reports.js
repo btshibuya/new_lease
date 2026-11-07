@@ -85,7 +85,8 @@ export function worksheet(gen, companies, pol, names, period) {
       const row = get(l);
       const col = j.kind === 'IND' ? 'ind' : 'con';
       row[col] += l.amt;
-      row.items.push({ col, contract: j.contractId, co: l.co, src: `${j.tpl} ${j.title}`, amt: l.amt, basis: (l.bases || [])[0] || '' });
+      // content：仕訳の内容（開始仕訳・洗替は元の内容つき）。精算表の列を内容別に分けるときに使う
+      row.items.push({ col, contract: j.contractId, co: l.co, src: `${j.tpl}${j.src ? `・${j.src}` : ''} ${j.title}`, content: j.src ? `${j.tpl}:${j.src}` : j.tpl, contentTitle: j.title, tpl: j.tpl, srcTpl: j.src || '', amt: l.amt, basis: (l.bases || [])[0] || '' });
     }
   }
   const out = [...rows.values()].map((r) => ({ ...r, simple: r.lessee + r.lessor, consol: r.lessee + r.lessor + r.ind + r.con }));
