@@ -88,10 +88,10 @@ function drawReturn() {
 }
 
 function goBack() {
-  const r = returns.pop();
-  drawReturn();
-  if (!r) return;
+  if (!returns.length) return;
   guard(() => {
+    const r = returns.pop();
+    drawReturn();
     if (r.extra && restoreHook) restoreHook.load(r.extra);
     if (location.hash !== r.hash) location.hash = r.hash;
     else window.dispatchEvent(new HashChangeEvent('hashchange'));

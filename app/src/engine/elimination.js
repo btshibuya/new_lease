@@ -428,7 +428,7 @@ export function contractJournals(c, period, ctx) {
     const act = sched.months.filter((x) => x.m >= period.start && x.m <= period.end && x.m >= sched.meta.start);
     const dep = lessorDepBetween(sched, period.start, period.end, ratio, R); // 累計を丸めた差（区切りによらず合計が一致）
     if (dep) {
-      c12.push(ln('DEP_RECLASS', 'CONSOL', dep, meta, `リース期間中（${act.length}か月）の貸手減価償却費 × 按分比率 ${pct(ratio)}`));
+      c12.push(ln('DEP_RECLASS', 'CONSOL', dep, meta, `リース期間中（${act.length}か月）の貸手減価償却費（按分後）＝ 期末の償却累計額×按分比率 ${pct(ratio)} − 期首の償却累計額×按分比率（それぞれ端数処理。区切りによらず合計が一致）`));
       c12.push(ln('RENTAL_DEP', c.lessorCo, -dep, meta, '貸手の減価償却費（賃貸原価等）'));
     }
   }
@@ -453,7 +453,7 @@ export function contractJournals(c, period, ctx) {
     // 内容別に、繰越の設定に従って「開始仕訳」「洗替」「当期の仕訳」を作る
     const push = (j) => { if (j) jr.push(j); };
     // 前期以前に手修正した仕訳の差額（手修正後−修正前）は、繰越ありの内容なら開始仕訳で引き継ぐ
-    const priorOv = (ctx.overrides || []).filter((o) => o.contractId === c.id && ymToIndex(o.periodEnd) < period.start);
+    const priorOv = carriedOverrides((ctx.overrides || []).filter((o) => o.contractId === c.id && ymToIndex(o.periodEnd) < period.start));
     for (const K of [...new Set(priorOv.map((o) => o.src || o.tpl))]) {
       if (!TEMPLATES[K] || TEMPLATES[K].kind !== 'CON' || K === 'C-12' || carryModeOf(carryCfg, K) === 'none') continue;
       const adj = priorOv.filter((o) => (o.src || o.tpl) === K).flatMap((o) => overrideDiff(o).map((d) => ({ ...ln(d.acc, d.co, d.amt, meta, `手修正の引継（${o.periodStart}〜${o.periodEnd}：${o.reason}）`), tpl: K })));
@@ -708,4 +708,30 @@ export function overrideSuggestions(diff) {
   const out = [];
   for (const d of diff) for (const x of map[d.acc] || []) if (!out.some((y) => y.label === x.label && y.page === x.page)) out.push({ ...x, acc: d.acc });
   return out;
+}
+
+/**
+ * 引き継ぐ手修正を選ぶ：同じ契約・内容で期間が重なる手修正（累計の期間どうし、年度と月次など）は、
+ * 期末が最も遅いもの（同じなら期間が長いもの）だけを使う（同じ修正が重複して引き継がれるのを防ぐ）。
+ */
+export function carriedOverrides(list) {
+  const out = [];
+  const sorted = [...list].sort((a, b) => ymToIndex(b.periodEnd) - ymToIndex(a.periodEnd) || ymToIndex(a.periodStart) - ymToIndex(b.periodStart));
+  for (const o of sorted) {
+    const s = ymToIndex(o.periodStart), e = ymToIndex(o.periodEnd);
+    const overlap = out.some((x) => x.contractId === o.contractId && x.tpl === o.tpl && (x.src || '') === (o.src || '') && s <= ymToIndex(x.periodEnd) && ymToIndex(x.periodStart) <= e);
+    if (!overlap) out.push(o);
+  }
+  return out;
+}
+
+/** 期間が重なる手修正（同じ契約・内容）の組 */
+export function overlappingOverrides(list) {
+  const pairs = [];
+  for (let i = 0; i < list.length; i++) for (let k = i + 1; k < list.length; k++) {
+    const a = list[i], b = list[k];
+    if (a.contractId !== b.contractId || a.tpl !== b.tpl || (a.src || '') !== (b.src || '')) continue;
+    if (ymToIndex(a.periodStart) <= ymToIndex(b.periodEnd) && ymToIndex(b.periodStart) <= ymToIndex(a.periodEnd)) pairs.push([a, b]);
+  }
+  return pairs;
 }

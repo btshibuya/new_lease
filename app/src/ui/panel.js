@@ -38,6 +38,7 @@ export function openCalc(info, anchor) {
   for (const a of st.anchors) a.classList.remove('hl-main');
   // 画面の数値を押したときは新しい経路を始める（「さらに分解する」は同じ経路に積む）
   if (anchor) { anchor.classList.add('hl-main'); st.anchors = [anchor]; st.stack = []; }
+  if (info && info.fresh) st.stack = []; // 数値を押さずに開く場合も、新しい経路として開く
   st.stack.push(info);
   render();
   st.el.scrollTop = 0;

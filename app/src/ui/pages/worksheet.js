@@ -11,7 +11,7 @@ import { contentOrder } from '../components.js';
 const view = { gran: 'kind' };
 const GRANS = [['kind', '区分別（個社修正・連結修正）'], ['content_open', '内容別（開始仕訳はまとめる）'], ['content', '内容別（開始仕訳も内容別）']];
 import { ACCOUNTS, accountLabel } from '../../engine/accounts.js';
-import { TEMPLATES, generateAll, carryModeOf } from '../../engine/elimination.js';
+import { TEMPLATES, generateAll, carryModeOf, CARRY_DEFS } from '../../engine/elimination.js';
 import { toCsv } from '../../engine/data.js';
 import { fmt, indexToJp } from '../../engine/util.js';
 
@@ -57,7 +57,7 @@ export function renderWorksheet(ctx) {
     const items = r.items.filter((x) => (x.col === 'ind' || x.col === 'con') && colKeyOf(x) === cc.key && x.amt);
     return { context: `連結精算表・${period.label}（借方＋／貸方△）`, title: `${r.label}：${cc.key === 'OPEN' ? '' : `${cc.key.replace(':', '・')} `}${cc.title}`, value: r.byContent[cc.key] || 0,
       breakdown: { title: `内訳（${items.length}件）`, cols: [{ label: '契約', key: 'contract' }, { label: '元の仕訳', key: 'src' }, { label: '金額', key: 'amt', num: true }], rows: [...items, { contract: '合計', src: '', amt: items.reduce((a, x) => a + x.amt, 0), total: true }] },
-      sources: [{ label: '仕訳', kind: 'journal' }], links: links(r, cc.key), more: split.more(r, cc.key) };
+      sources: [{ label: '仕訳', kind: 'journal' }], links: links(r, cc.key) };
   };
   const split = monthlySplitter(ctx);
   const withLinks = (fn, r, key) => () => ({ ...fn(), links: links(r, null), more: key ? split.more(r, key) : [] });
@@ -133,6 +133,8 @@ export function renderWorksheet(ctx) {
 }
 
 const OPEN_TPLS = new Set(['C-01', 'C-01T', 'C-01N', 'M-01O']);
+const splitCache = new WeakMap(); // 計算結果（gen）ごとの月別の仕訳
+const prevCache = new WeakMap(); // 計算結果（gen）ごとの前期末の仕訳
 const contentOf = (j) => (j.src ? `${j.tpl}:${j.src}` : j.tpl);
 
 /**
@@ -141,7 +143,7 @@ const contentOf = (j) => (j.src ? `${j.tpl}:${j.src}` : j.tpl);
  */
 function monthlySplitter(ctx) {
   const { data, pol, names, period, schedCache, gen } = ctx;
-  const cache = new Map();
+  const cache = splitCache.get(gen) || splitCache.set(gen, new Map()).get(gen); // 同じ計算結果の間は月ごとの仕訳を使い回す
   const genOf = (m) => cache.get(m) || cache.set(m, generateAll(data, { start: m, end: m, label: indexToJp(m), fyEnd: period.fyEnd }, pol, { schedCache })).get(m);
   const pick = (key) => (j) => (key === 'IND' ? j.kind === 'IND' : key === 'CON' ? j.kind === 'CON' : key === 'OPEN' ? OPEN_TPLS.has(j.tpl) || j.tpl === 'C-01R' : contentOf(j) === key);
   const sumOf = (js, label) => js.flatMap((j) => j.lines).filter((l) => accountLabel(l, pol, names) === label).reduce((a, l) => a + l.amt, 0);
@@ -178,7 +180,8 @@ function monthlySplitter(ctx) {
       sources: [{ label: '仕訳', kind: 'journal' }],
     };
   };
-  return { more: (r, key) => (period.end > period.start ? [{ label: '月別に分解（期首＋各月の増減）', desc: 'この金額を月ごとの増減に分けます', open: open(r, key) }] : []) };
+  // 期末残高一括消去（POL-03）では毎期の仕訳に期首の利益剰余金が含まれるため、利益剰余金期首は月に分けない
+  return { more: (r, key) => (period.end > period.start && !(r.acc === 'RE_OPEN' && pol['POL-03'] === 'balance') ? [{ label: '月別に分解（期首＋各月の増減）', desc: 'この金額を月ごとの増減に分けます', open: open(r, key) }] : []) };
 }
 
 /**
@@ -188,9 +191,17 @@ function monthlySplitter(ctx) {
 function renderRollforward(ctx) {
   const { data, pol, names, period, schedCache, gen, companies } = ctx;
   const cfg = data.config.carry || {};
-  let prev;
-  try { prev = generateAll(data, { start: period.start - 1, end: period.start - 1, label: '前期末', fyEnd: period.fyEnd }, pol, { schedCache }); } catch (e) { return card('残高の増減表', h('div', { class: 'alert alert-err' }, e.message)); }
-  const carried = (j) => !j.manual && j.kind === 'CON' && (j.src || j.tpl) !== 'C-12' && carryModeOf(cfg, j.src || j.tpl) !== 'none';
+  if (pol['POL-03'] === 'balance') {
+    return h('section', { class: 'card', id: 'rollforward' }, h('h2', null, `残高の増減表と期間の連続性（${period.label}）`),
+      h('div', { class: 'alert alert-info' }, '会計方針 POL-03 が「期末残高一括消去」のため、開始仕訳を作らず、毎期末に残高を一括で消去します。前期末の残高と当期首の開始仕訳の比較は行いません（期間の連続性は検算 CHK-06 で確認しています）。'));
+  }
+  let prev = prevCache.get(gen);
+  if (!prev) {
+    try { prev = generateAll(data, { start: period.start - 1, end: period.start - 1, label: '前期末', fyEnd: period.fyEnd }, pol, { schedCache }); } catch (e) { return card('残高の増減表', h('div', { class: 'alert alert-err' }, e.message)); }
+    prevCache.set(gen, prev);
+  }
+  // 比較の対象は、繰越設定のある内容（CARRY_DEFS）のうち「繰越あり」のもの
+  const carried = (j) => !j.manual && j.kind === 'CON' && CARRY_DEFS.some((d) => d.tpl === (j.src || j.tpl)) && (j.src || j.tpl) !== 'C-12' && carryModeOf(cfg, j.src || j.tpl) !== 'none';
   const RE = '利益剰余金（期首）';
   const keyOf = (l) => (ACCOUNTS[l.acc]?.type === 'PL' || l.acc === 'RE_OPEN' ? RE : accountLabel(l, pol, names));
   const rows = new Map();
@@ -236,7 +247,7 @@ function renderRollforward(ctx) {
   ], list, { className: 'ws-table' });
   return h('section', { class: 'card', id: 'rollforward' }, h('h2', null, `残高の増減表と期間の連続性（${period.label}）`),
     h('div', { class: ng.length ? 'alert alert-err' : 'alert alert-ok' }, ng.length ? `${ng.length}科目で、前期末の残高と当期首の開始仕訳が一致しません。繰越設定・手修正・契約の変更（確定済み期間の数値の変更）を確認してください。` : '貸借対照表のすべての科目で、前期末の残高（前期末までの仕訳から別に計算）と当期首の開始仕訳が一致しています。'),
-    h('div', { class: 'alert alert-info' }, '期末＝期首（開始仕訳）＋手修正の引継＋当期の増減。「繰越なし」の内容（流動・固定の組替など）と個社修正は、毎期末に計上し直すため「当期の増減」に含みます。利益剰余金（期首）の行は、前期末の損益の累計（繰越ありの内容）と開始仕訳の利益剰余金期首を比べます。手入力仕訳は対象外です（仕訳帳で確認）。金額を押すと契約・仕訳ごとの内訳を表示します。'),
+    h('div', { class: 'alert alert-info' }, '期末＝期首（開始仕訳）＋手修正の引継＋当期の増減。「繰越なし」の内容（流動・固定の組替など）と個社修正は、毎期末に計上し直すため「当期の増減」に含みます。利益剰余金（期首）の行は、前期末の損益の累計（繰越ありの内容）と開始仕訳の利益剰余金期首を比べます。手入力仕訳は前期末・期首の比較の対象外ですが、当期の増減・期末には含みます（仕訳帳で確認）。金額を押すと契約・仕訳ごとの内訳を表示します。'),
     list.length ? tbl : h('p', { class: 'muted' }, '対象の残高はありません。'));
 }
 

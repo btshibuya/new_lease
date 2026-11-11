@@ -165,3 +165,39 @@ test('月次（発生・累計）：期末月の累計＝年度、各月の累�
     }
   }
 });
+
+test('貸手の減価償却費の組替（C-12）：按分比率が1でなくても、区切りによらず合計が一致し、C-11 の償却累計額（按分後）の増加と一致する', () => {
+  const d = structuredClone(base);
+  for (const [id, r] of [['K-002', 1 / 3], ['K-003', 0.5], ['K-007', 0.5]]) { const c = d.contracts.find((x) => x.id === id); c.lessor.ratio = r; if (!c.lessor.assetCost) { c.lessor.assetCost = 900; c.lessor.assetLifeMonths = 120; c.lessor.assetStart = '2020-04'; } }
+  const data = sanitizeData(d).data;
+  const c12 = (p) => { const m = {}; for (const j of generateAll(data, p, pol).journals.filter((x) => x.tpl === 'C-12')) for (const l of j.lines.filter((x) => x.acc === 'DEP_RECLASS')) m[j.contractId] = (m[j.contractId] || 0) + l.amt; return m; };
+  const acc11 = (p) => { const m = {}; for (const j of generateAll(data, p, pol).journals.filter((x) => (x.src || x.tpl) === 'C-11')) for (const l of j.lines.filter((x) => x.acc === 'RECLASS_ACC')) m[j.contractId] = (m[j.contractId] || 0) - l.amt; return m; };
+  const yrs = buildPeriods(ymToIndex('2027-04'), ymToIndex('2031-03'), 3, 'year');
+  const mos = buildPeriods(ymToIndex('2027-04'), ymToIndex('2031-03'), 3, 'month');
+  for (const y of yrs) {
+    const sum = {};
+    for (const m of mos.filter((x) => x.start >= y.start && x.end <= y.end)) for (const [k, v] of Object.entries(c12(m))) sum[k] = (sum[k] || 0) + v;
+    assert.deepEqual(c12(y), Object.fromEntries(Object.entries(sum).filter(([, v]) => v)), `${y.label} 月次の合計＝年度`);
+    // 期中に終了しない契約は、C-12（当期の償却費）＝ C-11 の償却累計額の当期の増加
+    const prev = { start: y.start - 1, end: y.start - 1, label: 'p', fyEnd: y.fyEnd - 12 };
+    const a1 = acc11(y), a0 = acc11(prev), dep = c12(y);
+    for (const id of ['K-002', 'K-007']) if (a1[id] && a0[id]) assert.equal(dep[id] || 0, a1[id] - a0[id], `${y.label} ${id}`);
+  }
+});
+
+test('手修正：累計の期間どうしなど期間が重なる手修正は、期末が最も遅いものだけを引き継ぎ、CHK-18 で警告する', () => {
+  const ytd = buildPeriods(ymToIndex('2027-04'), ymToIndex('2028-03'), 3, 'month_ytd');
+  const d = structuredClone(base);
+  d.overrides = { journals: [] };
+  for (const p of [ytd[2], ytd[5], ytd[8], ytd[11]]) {
+    const j = generateAll(base, p, pol).journals.find((x) => x.contractId === 'K-001' && x.tpl === 'C-03');
+    const orig = j.lines.map((l) => ({ acc: l.acc, co: l.co, amt: l.amt }));
+    d.overrides.journals.push({ key: overrideKey(p, j), periodStart: indexToYm(p.start), periodEnd: indexToYm(p.end), contractId: 'K-001', tpl: 'C-03', src: '', lines: orig.map((l) => ({ ...l, amt: l.amt + (l.amt > 0 ? 10 : -10) })), orig, reason: '累計の修正', at: '' });
+  }
+  const data = sanitizeData(d).data;
+  const next = buildPeriods(ymToIndex('2028-04'), ymToIndex('2029-03'), 3, 'year')[0];
+  const g = generateAll(data, next, pol);
+  assert.deepEqual(net(g.journals.filter((j) => j.carriedOverride)), { 'ROU_ACC|S1': 10, 'RE_OPEN|S1': -10 });
+  const c18 = runChecks(data, next, pol, g).find((c) => c.id === 'CHK-18');
+  assert.ok(c18.rows.some((r) => /期間が重なる手修正/.test(r.message)));
+});

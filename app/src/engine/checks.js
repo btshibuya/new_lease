@@ -2,7 +2,7 @@
 // 原則：仕訳の生成（elimination.js の「個別仕訳の取消」）とは別の計算経路で、期待値を独立に組み立てて比較する。
 // 各検算の「独立性」の程度は independence に明記する（自己一致にすぎない検算を独立検証と誤認させないため）。
 // 注意：すべての誤りを検出できるわけではない。検出できる誤りの例は tests/mutation.test.js を参照。
-import { generateAll, overrideDiff, overrideSuggestions } from './elimination.js';
+import { generateAll, overrideDiff, overrideSuggestions, overlappingOverrides } from './elimination.js';
 import { worksheet, MUST_BE_ZERO, eFromSchedule, cashFlowEliminations } from './reports.js';
 import { validateContract, sortedMods, periodSummary } from './schedule.js';
 import { round, fmt, ymToIndex, indexToJp, indexToYm } from './util.js';
@@ -282,6 +282,9 @@ export function runChecks(data, period, pol, gen, names = {}, opts = {}) {
       rows.push({ contract: j.contractId, message: `${j.tpl}${j.src ? `・${j.src}` : ''} ${j.title}：手修正（理由：${j.override.reason}）。差額 ${diff.map((d) => `${ACCOUNTS[d.acc]?.name || d.acc}（${d.co}）${fmt(d.amt)}`).join('、')}${j.override.stale ? '。手修正後に元の計算が変わりました。手修正を見直してください' : ''}${sug ? `。契約情報等の修正候補：${sug}` : ''}`, warn: true });
     }
     for (const j of gen.journals.filter((x) => x.carriedOverride)) rows.push({ contract: j.contractId, message: `${j.title}：前期以前の手修正の差額を開始仕訳で引き継いでいます`, warn: true });
+    for (const [a, b] of overlappingOverrides(data.overrides?.journals || []).filter(([a]) => a.contractId && data.contracts.some((x) => x.id === a.contractId))) {
+      rows.push({ contract: a.contractId, message: `${a.tpl}${a.src ? `・${a.src}` : ''}：期間が重なる手修正があります（${a.periodStart}〜${a.periodEnd} と ${b.periodStart}〜${b.periodEnd}）。翌期以降の開始仕訳には、期末が遅いほうだけを引き継ぎます`, warn: true });
+    }
     for (const o of gen.overrideMissing || []) rows.push({ contract: o.contractId, message: `${o.tpl}${o.src ? `・${o.src}` : ''}：手修正の対象の仕訳がありません（契約・会計方針・繰越設定の変更で仕訳がなくなった可能性）。手修正を見直してください`, warn: true });
     for (const c of data.contracts) for (const p of c.paymentOverrides || []) {
       const m = ymToIndex(p.ym);

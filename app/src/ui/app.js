@@ -81,9 +81,18 @@ function currentPage() {
 
 /** 保存していない変更があるときは、画面移動の前に確認する */
 export async function guard(fn) {
-  if (!state.dirty) { fn(); return; }
+  if (!state.dirty) { fn(); return true; }
   const ok = await ask({ title: '保存していない変更があります', message: `「${state.dirty}」の変更は保存されていません。保存せずに移動しますか？`, okLabel: '保存せずに移動する', danger: true });
-  if (ok) { state.dirty = null; fn(); }
+  if (ok) { state.dirty = null; fn(); return true; }
+  return false;
+}
+
+/**
+ * 期間を変える操作は、保存していない変更があれば確認する。
+ * 取り消したときは画面を描き直さない（編集中の入力を消さないため）。プルダウンだけ元の選択に戻す。
+ */
+function changePeriod(patch, onCancel) {
+  guard(() => setUi(patch)).then((ok) => { if (!ok && onCancel) onCancel(); });
 }
 
 /** 左ツリーの子項目を押したとき：該当の見出し・行へ移動して黄色く光らせる */
@@ -170,7 +179,7 @@ function switchGranularity(g, ctx) {
   let i = list.findIndex((p) => p.end === end);
   if (i < 0) i = list.findIndex((p) => p.start <= end && end <= p.end);
   if (i < 0) i = list.findIndex((p) => p.end >= end);
-  setUi({ granularity: g, periodIndex: i >= 0 ? i : null });
+  changePeriod({ granularity: g, periodIndex: i >= 0 ? i : null });
 }
 
 function pageHead(page, ctx) {
@@ -183,11 +192,11 @@ function pageHead(page, ctx) {
     [['flow', '発生'], ['ytd', '累計']].map(([v2, l]) => h('button', { type: 'button', class: unit !== 'year' && basis === v2 ? 'on' : '', disabled: unit === 'year', 'aria-pressed': String(unit !== 'year' && basis === v2), on: { click: () => switchGranularity(gran(unit, v2), ctx) } }, l)));
   const st = ctx.status === 'ok' ? statusBadge('ok', '検算OK') : ctx.status === 'warn' ? statusBadge('warn', '検算：確認事項あり') : statusBadge('ng', '検算：NGあり');
   const i = ctx.periodIndex;
-  const move = (d) => setUi({ periodIndex: Math.min(ctx.periods.length - 1, Math.max(0, i + d)) });
+  const move = (d) => changePeriod({ periodIndex: Math.min(ctx.periods.length - 1, Math.max(0, i + d)) });
   // 期間の一覧は年度ごとにまとめる（月次は件数が多いため）
   const byFy = new Map();
   ctx.periods.forEach((p, k) => { const key = p.fyEnd; (byFy.get(key) || byFy.set(key, []).get(key)).push([p, k]); });
-  const sel = h('select', { 'aria-label': '期間', class: 'period-select', on: { change: (e) => setUi({ periodIndex: Number(e.target.value) }) } },
+  const sel = h('select', { 'aria-label': '期間', class: 'period-select', on: { change: (e) => changePeriod({ periodIndex: Number(e.target.value) }, () => { e.target.value = String(i); }) } },
     unit === 'year' ? ctx.periods.map((p, k) => h('option', { value: k, selected: k === i }, p.label))
       : [...byFy.values()].map((arr) => h('optgroup', { label: `${indexToJp(arr[0][0].fyEnd)}期末の年度` }, arr.map(([p, k]) => h('option', { value: k, selected: k === i }, p.label)))));
   const months = ctx.period.end - ctx.period.start + 1;
@@ -209,6 +218,9 @@ function render() {
   const root = document.getElementById('app');
   const page = currentPage();
   if (render.lastPage && render.lastPage !== page.id) { closeCalc(); state.ui.menuOpen = false; }
+  const periodKey = `${state.ui.granularity}|${state.ui.periodIndex}`;
+  if (render.lastPeriod !== undefined && render.lastPeriod !== periodKey) closeCalc();
+  render.lastPeriod = periodKey;
   let ctx;
   try {
     ctx = compute();
@@ -277,12 +289,14 @@ setContractLink((id) => {
 // キーボード：Alt＋←／→ で前後の期間へ（入力中は除く）
 window.addEventListener('keydown', (e) => {
   if (!e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
-  const tag = (document.activeElement && document.activeElement.tagName) || '';
-  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || document.querySelector('.modal-bg')) return;
+  const el = document.activeElement;
+  const tag = (el && el.tagName) || '';
+  const onPeriod = el && el.classList && el.classList.contains('period-select');
+  if ((['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) && !onPeriod) || document.querySelector('.modal-bg')) return;
+  e.preventDefault(); // ブラウザの戻る・進むを働かせない
   const ctx = memo.ctx;
   if (!ctx) return;
   const i = ctx.periodIndex + (e.key === 'ArrowLeft' ? -1 : 1);
   if (i < 0 || i >= ctx.periods.length) return;
-  e.preventDefault();
-  guard(() => setUi({ periodIndex: i }));
+  changePeriod({ periodIndex: i });
 });

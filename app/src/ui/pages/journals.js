@@ -3,6 +3,7 @@ import { journalCard, kpi, emptyState, groupJournals, contentKey, contentName, c
 import { update } from '../store.js';
 import { TEMPLATES, CARRY_DEFS, CARRY_MODES, carryModeOf, carryWarnings, generateAll, openingTrace, overrideKey, overrideDiff, overrideSuggestions } from '../../engine/elimination.js';
 import { goTo, chooseAndGo, rememberReturn, setRestoreHook } from '../nav.js';
+import { guard } from '../app.js';
 import { setReportUnit } from './contracts.js';
 import { openCalc } from '../panel.js';
 import { accountLabel, ACCOUNTS } from '../../engine/accounts.js';
@@ -17,11 +18,13 @@ setRestoreHook({ save: () => ({ ...filter }), load: (x) => Object.assign(filter,
 
 /** 他の画面（連結精算表など）から、条件を指定して仕訳帳・元帳を開く */
 export function focusJournals(opts = {}) {
-  rememberReturn();
-  Object.assign(filter, { kind: 'all', contract: 'all', content: 'all', account: '', q: '' }, opts);
-  if (location.hash === '#journals') window.dispatchEvent(new HashChangeEvent('hashchange'));
-  else location.hash = '#journals';
-  setTimeout(() => document.getElementById(opts.account ? 'ledger' : 'journal-book')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+  guard(() => {
+    rememberReturn();
+    Object.assign(filter, { kind: 'all', contract: 'all', content: 'all', account: '', q: '' }, opts);
+    if (location.hash === '#journals') window.dispatchEvent(new HashChangeEvent('hashchange'));
+    else location.hash = '#journals';
+    setTimeout(() => document.getElementById(opts.account ? 'ledger' : 'journal-book')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+  });
 }
 
 export function renderJournals(ctx) {
@@ -119,8 +122,12 @@ function nextPeriodOf(ctx) {
   const { periods, periodIndex, period } = ctx;
   // 累計（期首から）の表示では、翌期＝次の年度（期首が同じ次の累計期間の開始仕訳は当期と同じになるため）
   if (period.ytd) {
-    const y = ctx.yearPeriods.find((p) => p.start === period.fyEnd + 1);
-    return y || { start: period.fyEnd + 1, end: period.fyEnd + 12, label: '翌年度', fyEnd: period.fyEnd + 12 };
+    if (period.end === period.fyEnd) {
+      const y = ctx.yearPeriods.find((p) => p.start === period.fyEnd + 1);
+      return y || { start: period.fyEnd + 1, end: period.fyEnd + 12, label: '翌年度', fyEnd: period.fyEnd + 12 };
+    }
+    // 年度の途中までの累計：その末の残高を引き継ぐ翌月首の開始仕訳（参考）
+    return { start: period.end + 1, end: period.end + 1, label: `${indexToJp(period.end + 1)}（参考）`, fyEnd: period.fyEnd };
   }
   if (periods[periodIndex + 1]) return periods[periodIndex + 1];
   const len = period.end - period.start + 1;
@@ -342,7 +349,7 @@ function showTrace(j, ctx) {
   if (!r) return;
   const tr = openingTrace(r, j, ctx.yearPeriods, ctx.pol, ctx.companies);
   const coName = (code) => (code === 'CONSOL' ? '連結' : ctx.companies.find((c) => c.code === code)?.name || code);
-  openCalc({ context: `${j.title}（${j.contractId}）`, title: '開始仕訳の年度別内訳', value: j.lines.filter((l) => l.amt > 0).reduce((a, l) => a + l.amt, 0),
+  openCalc({ fresh: true, context: `${j.title}（${j.contractId}）`, title: '開始仕訳の年度別内訳', value: j.lines.filter((l) => l.amt > 0).reduce((a, l) => a + l.amt, 0),
     breakdown: { title: `前期以前の仕訳（${tr.length}行）`, cols: [{ label: '年度', key: 'year' }, { label: '科目', key: 'accName' }, { label: '会社', key: 'coName' }, { label: '金額（借方＋）', key: 'amt', num: true }], rows: tr.map((x) => ({ ...x, accName: accountLabel({ acc: x.acc, meta: {} }, ctx.pol, ctx.names), coName: coName(x.co) })) },
     notes: [...new Set(tr.map((x) => x.note))].slice(0, 10), sources: [{ label: '前期末からの繰越', kind: 'carry' }] });
 }

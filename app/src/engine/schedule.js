@@ -475,9 +475,16 @@ export function periodSummary(sched, startIdx, endIdx) {
 
 /**
  * 貸手資産の減価償却費（リース期間中の分・按分後）を期間で求める。
- * 端数処理は「期首からの累計を丸めた額の差」で行うため、月次・四半期・年度のどの区切りでも合計が一致する。
+ * 端数処理は「償却累計額（取得時から）×按分比率を丸めた額の差」で行うため、月次・四半期・年度のどの区切りでも合計が一致し、
+ * 連結上の自己使用資産の償却累計額（C-11、按分後）の増加額とも一致する。
  */
 export function lessorDepBetween(sched, start, end, ratio, R) {
-  const cum = (idx) => sched.months.filter((x) => x.m >= sched.meta.start && x.m <= idx).reduce((a, x) => a + (x.lessor.assetDep || 0), 0);
-  return R(cum(end) * ratio) - R(cum(start - 1) * ratio);
+  // 端数の起点は貸手資産の償却累計額（取得時から）にそろえる：C-11 の償却累計額（按分後）の増加額と一致する
+  const s = Math.max(start, sched.meta.start);
+  const e = Math.min(end, sched.meta.lastIdx);
+  if (s > e) return 0;
+  const recS = sched.byIndex(s), recE = sched.byIndex(e);
+  if (!recS || !recE) return 0;
+  const accBefore = (recS.lessor.assetAcc_end || 0) - (recS.lessor.assetDep || 0); // リース期間の開始前（または期間の開始前）の償却累計額
+  return R((recE.lessor.assetAcc_end || 0) * ratio) - R(accBefore * ratio);
 }
