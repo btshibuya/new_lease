@@ -4,7 +4,7 @@
 // 連結の注記額 ＝ 各社の個別の注記額の合計 − うちグループ内リース分
 // グループ内リース分は、アプリで計算できる項目（calc）は契約から計算し、計算できない項目（input）は各社が収集表に記入する。
 import { round } from './util.js';
-import { toCsv } from './data.js';
+import { toCsv, validCode } from './data.js';
 import { parseCsv } from './contractCsv.js';
 import { maturity } from './reports.js';
 
@@ -206,14 +206,17 @@ export function sanitizeNoteInputs(raw) {
   const out = {};
   if (!raw || typeof raw !== 'object') return out;
   const keys = new Set(noteRows().map((r) => r.key));
+  const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
   const num = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
   for (const [pk, byCo] of Object.entries(raw).slice(0, 200)) {
     if (!/^\d{4}-\d{2}$/.test(pk) || !byCo || typeof byCo !== 'object') continue;
     for (const [co, byKey] of Object.entries(byCo).slice(0, 500)) {
-      if (!/^[A-Za-z0-9_-]{1,20}$/.test(co) || !byKey || typeof byKey !== 'object') continue;
+      // 会社コードは会社マスタと同じ規則（__proto__・constructor 等の予約語は不可：プロトタイプ汚染の防止）
+      if (!validCode(co) || !/^[A-Za-z0-9_-]{1,20}$/.test(co) || !byKey || typeof byKey !== 'object') continue;
       for (const [k, v] of Object.entries(byKey)) {
         if (!keys.has(k) || !v || typeof v !== 'object') continue;
-        out[pk] = out[pk] || {}; out[pk][co] = out[pk][co] || {};
+        if (!own(out, pk)) out[pk] = {};
+        if (!own(out[pk], co)) out[pk][co] = {};
         out[pk][co][k] = { total: num(v.total), group: num(v.group), memo: String(v.memo ?? '').slice(0, 1000) };
       }
     }

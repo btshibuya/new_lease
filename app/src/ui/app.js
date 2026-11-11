@@ -1,7 +1,9 @@
 // アプリ本体：画面遷移・期間選択・計算結果の共有
 import { h, clear, ask, statusBadge } from './dom.js';
 import { state, init, subscribe, setUi, isLocked } from './store.js';
-import { mountPanel, closeCalc } from './panel.js';
+import { mountPanel, closeCalc, setContractLink } from './panel.js';
+import { chooseAndGo, goTo } from './nav.js';
+import { setReportUnit } from './pages/contracts.js';
 import { POLICIES } from '../engine/policies.js';
 import { buildPeriods, ymToIndex, fiscalYearOf } from '../engine/util.js';
 import { buildSchedule } from '../engine/schedule.js';
@@ -226,3 +228,13 @@ window.addEventListener('hashchange', () => {
 });
 window.addEventListener('beforeunload', (e) => { if (state.dirty) { e.preventDefault(); e.returnValue = ''; } });
 render();
+
+// 計算の確認の内訳にある契約番号から、契約の登録画面・月次レポートへ移動する
+setContractLink((id) => {
+  const c = state.data.contracts.find((x) => x.id === id);
+  if (!c) return null;
+  return () => chooseAndGo(`契約 ${c.id} ${c.name}`, [
+    { title: `契約の登録：${c.id}`, desc: '契約（物件）の登録・編集画面', page: 'contracts', contractId: c.id, target: 'contract-editor' },
+    { title: `返済・償却スケジュールと財務諸表への影響（月次）：${c.id}`, desc: '毎月の元本・利息・償却費・資産・負債・損益への影響', go: () => { setReportUnit('month'); goTo({ page: 'contracts', contractId: c.id, target: 'contract-monthly' }); } },
+  ]);
+});

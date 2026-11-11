@@ -99,26 +99,44 @@ test('四半期（累計）：第4四半期累計の仕訳は年度と同じ。�
   }
 });
 
-import { contractMonthly, rollupMonthly, contractYearly } from '../app/src/engine/reports.js';
+import { contractMonthly, rollupMonthly, contractYearly, eFromSchedule } from '../app/src/engine/reports.js';
 import { currentPortion } from '../app/src/engine/schedule.js';
 
-test('契約の月次レポート：元本＋利息＝支払、年度に集計すると年度別サマリーと一致、終了時に消去差額は0', () => {
+test('契約の月次レポート：年度に集計すると年度別サマリー（支払・利息・元本・期末負債・簿価・償却費・借手費用・貸手収益・連結損益への影響）と一致', () => {
   const YRS = buildPeriods(ymToIndex('2024-04'), ymToIndex('2040-03'), 3, 'year');
-  for (const c of base.contracts) {
-    const s = buildSchedule(c, pol, { lesseeCompany: base.companies.find((x) => x.code === c.lesseeCo) });
-    const mo = contractMonthly(s, pol);
-    for (const r of mo) if (r.principal) assert.equal(r.principal + r.int, r.pay, `${c.id} ${r.m}`);
-    const yr = rollupMonthly(mo, YRS);
-    const ref = contractYearly(s, YRS, currentPortion);
-    for (const y of yr) {
-      const rf = ref.find((x) => x.label === y.label);
-      if (!rf) continue;
-      assert.equal(y.L, rf.closeL, `${c.id} ${y.label} 期末負債`);
-      assert.equal(y.rou, rf.rouNet, `${c.id} ${y.label} 使用権資産簿価`);
-      assert.equal(y.dep, rf.dep, `${c.id} ${y.label} 償却費`);
-      assert.equal(y.inc, rf.inc, `${c.id} ${y.label} 貸手収益`);
+  // サンプルに加え、初期直接費用のある契約（日本基準）・ASC842 の契約・初期直接費用を資産計上する方針でも確かめる
+  const extra = [
+    { ...structuredClone(base.contracts.find((c) => c.id === 'K-001')), id: 'T-IDC', lessee: { ...base.contracts.find((c) => c.id === 'K-001').lessee, idc: 1200 } },
+    { ...structuredClone(base.contracts.find((c) => c.id === 'K-004')), id: 'T-ASC' },
+  ];
+  for (const pl of [pol, { ...pol, 'POL-07': 'capitalize' }]) {
+    for (const c of [...base.contracts, ...extra]) {
+      const s = buildSchedule(c, pl, { lesseeCompany: base.companies.find((x) => x.code === c.lesseeCo) });
+      const mo = contractMonthly(s, pl);
+      const yr = rollupMonthly(mo, YRS);
+      const ref = contractYearly(s, YRS, currentPortion);
+      const eAt = (idx) => Object.values(eFromSchedule(s, idx, pl)).reduce((a, v) => a + v, 0);
+      let n = 0;
+      for (const y of yr) {
+        const rf = ref.find((x) => x.label === y.label);
+        if (!rf) continue;
+        n++;
+        const tag = `${c.id} ${y.label} ${pl['POL-07']}`;
+        for (const [k, rk] of [['pay', 'pay'], ['int', 'int'], ['principal', 'principal'], ['L', 'closeL'], ['rou', 'rouNet'], ['dep', 'dep'], ['lesseeExp', 'lesseeExp'], ['inc', 'inc'], ['R', 'R'], ['X', 'X']]) assert.equal(y[k], rf[rk], `${tag} ${k}`);
+        assert.equal(y.plEffect, eAt(rf.end) - eAt(rf.start - 1), `${tag} 連結損益への影響`);
+        assert.equal(y.cumE, eAt(rf.end), `${tag} 消去差額の累計`);
+        assert.equal(y.lesseeExp, y.dep + y.int + y.other, `${tag} 借手の費用の内訳`);
+      }
+      assert.ok(n > 0, c.id);
+      if (!c.terminationYm) assert.equal(mo[mo.length - 1].cumE, 0, `${c.id} 終了時の消去差額`);
     }
-    assert.equal(mo.reduce((a, r) => a + r.plEffect, 0), mo[mo.length - 1].cumE - (mo[0].cumE - mo[0].plEffect));
-    if (!c.terminationYm) assert.equal(mo[mo.length - 1].cumE, 0, `${c.id} 終了時の消去差額`);
   }
+});
+
+test('セキュリティ：保存データの注記の収集値・手修正で、__proto__ 等によるプロトタイプ汚染や未知の科目を受け付けない', () => {
+  const raw = JSON.parse('{"noteInputs":{"2028-03":{"__proto__":{"L-VAR":{"total":1}},"constructor":{"L-VAR":{"total":2}},"P":{"L-VAR":{"total":3}}}},"overrides":{"journals":[{"periodStart":"2027-04","periodEnd":"2028-03","contractId":"K-001","tpl":"C-03","lines":[{"acc":"__proto__","co":"S1","amt":1},{"acc":"ROU_ACC","co":"__proto__","amt":1},{"acc":"ROU_ACC","co":"S1","amt":5}],"orig":[]}]}}');
+  const d = sanitizeData({ ...structuredClone(base), ...raw }).data;
+  assert.equal(({})['L-VAR'], undefined, 'Object.prototype が汚染されていない');
+  assert.deepEqual(Object.keys(d.noteInputs['2028-03']), ['P']);
+  assert.deepEqual(d.overrides.journals[0].lines, [{ acc: 'ROU_ACC', co: 'S1', amt: 5, label: '' }]);
 });

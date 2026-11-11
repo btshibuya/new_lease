@@ -21,6 +21,10 @@ const st = { el: null, stack: [], anchors: [] };
  *   links: [{ label, go }]             // 関連する画面へのリンク（元帳・仕訳帳など）
  * }
  */
+// 内訳の契約番号から契約へ移動する関数（app.js が設定。存在しない契約番号なら null を返す）
+let contractLink = null;
+export function setContractLink(fn) { contractLink = fn; }
+
 export function mountPanel(el) {
   st.el = el;
   setCalcHook(openCalc);
@@ -89,6 +93,14 @@ function render() {
     h('b', null, '計算の確認'), h('span', { class: 'spacer' }),
     st.stack.length > 1 ? h('button', { class: 'btn btn-sm', type: 'button', on: { click: () => { st.stack.pop(); render(); } } }, '← 戻る') : null,
     h('button', { class: 'btn btn-sm', type: 'button', 'aria-label': '閉じる', on: { click: closeCalc } }, '×')));
+  if (st.stack.length > 1) {
+    el.append(h('nav', { class: 'calc-crumbs', 'aria-label': 'ドリルダウンの経路' }, st.stack.map((x, i) => {
+      const last = i === st.stack.length - 1;
+      const name = String(x.title || '').slice(0, 24);
+      return h('span', null, i ? h('span', { class: 'crumb-sep' }, ' › ') : null,
+        last ? h('b', null, name) : h('button', { class: 'btn-link', type: 'button', title: x.context || '', on: { click: () => { st.stack.length = i + 1; render(); } } }, name));
+    })));
+  }
   if (info.context) el.append(h('div', { class: 'small muted' }, info.context));
   el.append(h('div', { style: { 'font-weight': '700' } }, info.title || ''));
   el.append(h('div', { class: 'val' }, v(info.value)));
@@ -106,6 +118,8 @@ function render() {
         h('tbody', null, b.rows.map((r) => h('tr', { class: r.total ? 'total' : '' }, b.cols.map((c) => {
           const badge = c.badge && r[c.badge] ? h('span', { class: 'badge co-badge' }, r[c.badge]) : null;
           const text = c.num ? v(r[c.key]) : (r[c.key] === undefined || r[c.key] === null ? '' : r[c.key]);
+          const go = c.key === 'contract' && !r.total && contractLink ? contractLink(String(r[c.key] ?? '')) : null;
+          if (go) return h('td', null, badge, h('button', { class: 'btn-link contract-link', type: 'button', title: '契約の登録画面・月次レポートへ', on: { click: go } }, text));
           return h('td', { class: c.num ? 'num' : '' }, badge, text);
         })))))));
   }

@@ -366,3 +366,8 @@ td.hl, .hl:not(rect) { fill: initial; }
   .app-header .who { order: 2; margin-left: auto; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }
+.tbl tr.event-row td { background: var(--cyan-soft); }
+.calc-crumbs { font-size: 12px; margin: 2px 0 6px; line-height: 1.8; }
+.calc-crumbs .btn-link { font-size: 12px; }
+.crumb-sep { color: var(--note); }
+.q-input { width: 200px; }

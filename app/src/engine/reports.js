@@ -214,7 +214,7 @@ export function contractYearly(sched, periods, currentPortionFn) {
     const inc = sum((x) => x.lessor.inc);
     const cumE = closeL + (le.lessee.X_end || 0) - rouNet - (le.lessor.R_end || 0);
     rows.push({
-      label: p.label, start: p.start, end: p.end, openL, newL, remL, pay, int, principal: pay - int, closeL,
+      label: p.label, start: p.start, end: p.end, openL, newL, remL, pay, int, principal: sched.meta.model === 'offbalance' ? 0 : pay - int, closeL, // 短期・少額リース等はリース負債がないため元本0
       cur: currentPortionFn ? currentPortionFn(sched, p.end) : 0,
       rouNet, dep, lesseeExp, inc, diff: lesseeExp - inc, cumE, termGain: term ? term.gain : 0,
       idc: inP.find((x) => x.lessee.commence)?.lessee.commence.idc || 0,
@@ -234,21 +234,30 @@ export function contractYearly(sched, periods, currentPortionFn) {
  */
 export function contractMonthly(sched, pol) {
   const eAt = (idx) => Object.values(eFromSchedule(sched, idx, pol)).reduce((a, v) => a + v, 0);
+  const model = sched.meta.model;
   const out = [];
   let prevE = eAt(sched.meta.firstIdx - 1);
   for (const x of sched.months) {
     const le = x.lessee, lo = x.lessor;
+    // 定義は年度別サマリー（contractYearly）と同じ：利息＝支払利息＋未払利息、支払＝借手の支払（適用開始後）
     const int = (le.int || 0) + (le.accr || 0);
-    const pay = le.active ? le.pay || 0 : lo.cash || 0;
+    const pay = le.pay || 0;
+    const prePay = !le.active ? lo.cash || 0 : 0; // 適用開始前（経過措置の測定開始前）の支払リース料
+    const other = (le.cost || 0) + prePay - (model === 'asc842ol' ? le.accr || 0 : 0); // 減価償却費・利息以外の借手の費用
+    const lesseeExp = (le.dep || 0) + int + other; // 初期直接費用の償却は dep に含まれる（取得原価＝リース負債＋初期直接費用）
     const rou = (le.cost_end || 0) - (le.acc_end || 0);
     const liabs = (le.L_end || 0) + (le.X_end || 0);
-    const lesseeExp = (le.dep || 0) + (le.int || 0) + (le.cost || 0) + (!le.active ? lo.cash || 0 : 0) - (sched.meta.model === 'asc842ol' ? le.accr || 0 : 0) + (le.idcDep || 0);
     const cumE = eAt(x.m);
+    const ev = [];
+    if (le.commence) ev.push(sched.meta.measSource !== 'none' ? '適用開始（経過措置）' : 'リース開始');
+    if (le.remeasure) ev.push(`条件変更（負債 ${le.remeasure.Lold}→${le.remeasure.Lnew}）`);
+    if (le.term) ev.push(le.term.kind === 'termination' ? '中途解約' : '満了');
+    if (prePay) ev.push('適用開始前の支払');
     out.push({
-      m: x.m, pay, int, principal: le.active && sched.meta.model !== 'offbalance' ? pay - int : 0, L: le.L_end || 0,
+      m: x.m, pay, prePay, int, principal: model !== 'offbalance' && le.active ? pay - int : 0, L: le.L_end || 0,
       cost: le.cost_end || 0, dep: le.dep || 0, acc: le.acc_end || 0, rou, X: le.X_end || 0,
-      assets: rou, liabs, equity: rou - liabs, lesseeExp, inc: lo.inc || 0, R: lo.R_end || 0,
-      cumE, plEffect: cumE - prevE,
+      assets: rou, liabs, equity: rou - liabs, other, lesseeExp, inc: lo.inc || 0, R: lo.R_end || 0,
+      cumE, plEffect: cumE - prevE, event: ev.join('・'),
     });
     prevE = cumE;
   }
@@ -257,13 +266,15 @@ export function contractMonthly(sched, pol) {
 
 /** 月次の行を期間（年度など）ごとにまとめる。残高は期末、フローは合計 */
 export function rollupMonthly(rows, periods) {
-  const FLOW = ['pay', 'int', 'principal', 'dep', 'lesseeExp', 'inc', 'plEffect'];
+  const FLOW = ['pay', 'prePay', 'int', 'principal', 'dep', 'other', 'lesseeExp', 'inc', 'plEffect'];
   return periods.map((p) => {
     const inP = rows.filter((r) => r.m >= p.start && r.m <= p.end);
     if (!inP.length) return null;
     const last = inP[inP.length - 1];
     const o = { ...last, label: p.label, start: p.start, end: p.end };
     for (const f of FLOW) o[f] = inP.reduce((a, r) => a + r[f], 0);
+    o.event = inP.filter((r) => r.event).map((r) => r.event).filter((e, i, arr) => arr.indexOf(e) === i).join('・');
+    o.months = inP; // 年度の行から月ごとの内訳へドリルダウンするため
     return o;
   }).filter(Boolean);
 }

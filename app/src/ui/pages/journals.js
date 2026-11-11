@@ -3,18 +3,19 @@ import { journalCard, kpi, emptyState, groupJournals, contentKey, contentName, c
 import { update } from '../store.js';
 import { TEMPLATES, CARRY_DEFS, CARRY_MODES, carryModeOf, carryWarnings, generateAll, openingTrace, overrideKey, overrideDiff, overrideSuggestions } from '../../engine/elimination.js';
 import { goTo, chooseAndGo } from '../nav.js';
+import { setReportUnit } from './contracts.js';
 import { openCalc } from '../panel.js';
 import { accountLabel, ACCOUNTS } from '../../engine/accounts.js';
 import { toCsv, sanitizeManual } from '../../engine/data.js';
 import { fmt, indexToYm, indexToJp } from '../../engine/util.js';
 
 // 表示の状態（画面を移っても保つ）
-const filter = { kind: 'all', contract: 'all', content: 'all', account: '', mode: 'contract' };
+const filter = { kind: 'all', contract: 'all', content: 'all', account: '', mode: 'contract', q: '' };
 const MODES = [['contract', '契約単位'], ['company', '会社単位'], ['total', '合計']];
 
 /** 他の画面（連結精算表など）から、条件を指定して仕訳帳・元帳を開く */
 export function focusJournals(opts = {}) {
-  Object.assign(filter, { kind: 'all', contract: 'all', content: 'all', account: '' }, opts);
+  Object.assign(filter, { kind: 'all', contract: 'all', content: 'all', account: '', q: '' }, opts);
   if (location.hash === '#journals') window.dispatchEvent(new HashChangeEvent('hashchange'));
   else location.hash = '#journals';
   setTimeout(() => document.getElementById(opts.account ? 'ledger' : 'journal-book')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
@@ -24,7 +25,10 @@ export function renderJournals(ctx) {
   const { gen, pol, names, companies, period, data } = ctx;
   const rerender = () => window.dispatchEvent(new HashChangeEvent('hashchange'));
   const match = (j) => (filter.kind === 'all' || j.kind === filter.kind) && (filter.contract === 'all' || j.contractId === filter.contract) && (filter.content === 'all' || contentKey(j) === filter.content || (j.src || j.tpl) === filter.content || (filter.content === 'OPEN' && (String(j.tpl).startsWith('C-01') || j.tpl === 'M-01O')));
-  const js = gen.journals.filter(match);
+  // 金額・科目名で探す：帳簿の金額（桁区切り・△可）または科目名の一部から、その金額・科目を含む仕訳を逆引きする
+  const qNum = (() => { const t = filter.q.replace(/[,，\s円]/g, '').replace(/^[△▲-]/, ''); return /^\d+(\.\d+)?$/.test(t) ? Number(t) : null; })();
+  const qHit = (j) => !filter.q || j.lines.some((l) => (qNum !== null ? Math.abs(l.amt) === qNum : accountLabel(l, pol, names).includes(filter.q.trim())));
+  const js = gen.journals.filter((j) => match(j) && qHit(j));
   const lines = js.flatMap((j) => j.lines);
   const pl = lines.filter((l) => ACCOUNTS[l.acc]?.type === 'PL' && !['TAX_ADJ', 'NCI_PL'].includes(l.acc)).reduce((a, l) => a - l.amt, 0);
   const tax = lines.filter((l) => l.acc === 'TAX_ADJ').reduce((a, l) => a + l.amt, 0);
@@ -37,9 +41,18 @@ export function renderJournals(ctx) {
     h('label', null, '区分 ', select([['all', 'すべて'], ['IND', '個社修正'], ['CON', '連結修正']], filter.kind, (v) => { filter.kind = v; rerender(); })),
     h('label', null, '内容 ', select([['all', 'すべて'], ['OPEN', '開始仕訳・洗替（すべて）'], ...contents.map(([k, t]) => [k, `${k.replace(':', '・')} ${t}`])], filter.content, (v) => { filter.content = v; rerender(); })),
     h('label', null, '契約 ', select([['all', 'すべて'], ...data.contracts.map((c) => [c.id, `${c.id} ${c.name}`])], filter.contract, (v) => { filter.contract = v; rerender(); })),
+    h('label', null, '金額・科目で探す ', h('input', { type: 'search', value: filter.q, placeholder: '例）4,580 または 支払利息', 'aria-label': '金額・科目で探す', class: 'q-input', on: { change: (e) => { filter.q = e.target.value; rerender(); } } })),
+    filter.q ? h('span', { class: 'muted small' }, `「${filter.q}」を含む仕訳 ${js.length}本`, ' ', h('button', { class: 'btn-link', type: 'button', on: { click: () => { filter.q = ''; rerender(); } } }, '解除')) : null,
     h('button', { class: 'btn', type: 'button', on: { click: () => exportCsv(js, ctx) } }, '仕訳帳を書き出す（CSV）'));
 
-  const links = (l, j) => [{ label: `元帳（${accountLabel(l, pol, names)}）`, go: () => focusJournals({ account: accountLabel(l, pol, names) }) }, ...(j ? contractTargets(j, data).slice(0, 6).map((t) => ({ label: `契約の登録（${t.contractId}）`, go: () => goTo(t) })) : [])];
+  // 金額の確認からのリンク：元帳と、その行（科目・会社）に金額のある契約の登録画面。6件以上なら候補から選ぶ
+  const links = (l, j) => {
+    const label = accountLabel(l, pol, names);
+    const parts = j ? (j.parts || [j]).filter((p) => p.lines.some((x) => accountLabel(x, pol, names) === label && x.co === l.co && x.amt)) : [];
+    const t = contractTargets({ parts }, data);
+    return [{ label: `元帳（${label}）`, go: () => focusJournals({ account: label }) },
+      ...(t.length <= 5 ? t.map((x) => ({ label: `契約の登録（${x.contractId}）`, go: () => goTo(x) })) : [{ label: `契約の登録（${t.length}件から選ぶ）`, go: () => chooseAndGo(`契約（物件）の登録画面へ：${label}`, t) }])];
+  };
   const grouped = groupJournals(js, filter.mode, ctx);
   const opening = grouped.filter((j) => String(j.tpl).startsWith('C-01') || j.tpl === 'M-01O');
   const current = grouped.filter((j) => !opening.includes(j));
@@ -295,7 +308,8 @@ export function relatedCandidates(j, ctx) {
   const perContract = (cid) => ({
     contract: { title: `契約情報：${cid}`, desc: '契約の編集画面', page: 'contracts', contractId: cid, target: 'contract-editor' },
     yearly: { title: `返済スケジュール（年度別サマリー）：${cid}`, desc: '期首・期末のリース負債、利息、元本、流動部分', page: 'contracts', contractId: cid, target: 'contract-yearly' },
-    monthly: { title: `償却・返済の月次スケジュール：${cid}`, desc: '月ごとの支払・利息・償却費・残高', page: 'contracts', contractId: cid, target: 'contract-monthly' },
+    // 月次の表で開く（直前に年度表示にしていても月ごとの明細に着地するように）
+    monthly: { title: `償却・返済の月次スケジュール：${cid}`, desc: '月ごとの支払・利息・償却費・残高・イベント', go: () => { setReportUnit('month'); goTo({ page: 'contracts', contractId: cid, target: 'contract-monthly' }); } },
     pay: { title: `返済スケジュール（支払額）の手修正：${cid}`, desc: '支払月ごとの支払額', page: 'contracts', contractId: cid, target: 'payment-schedule' },
     mods: { title: `条件変更・再測定：${cid}`, desc: '契約の編集画面の条件変更', page: 'contracts', contractId: cid, label: '条件変更・再測定（変更月の月初から適用）' },
   });
