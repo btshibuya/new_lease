@@ -7,7 +7,7 @@ import { guard } from '../app.js';
 import { validateContract, currentPortion, periodSummary, paymentPlan } from '../../engine/schedule.js';
 import { sanitizeContract } from '../../engine/data.js';
 import { contractTemplateCsv, contractsToCsv, importContractsCsv } from '../../engine/contractCsv.js';
-import { contractYearly, eFromSchedule, contractMonthly, rollupMonthly } from '../../engine/reports.js';
+import { contractYearly, eFromSchedule, contractMonthly, rollupMonthly, companyMonthly } from '../../engine/reports.js';
 import { ASSET_CLASSES, LESSEE_DEPT } from '../../engine/accounts.js';
 import { fmt, ymToIndex, indexToJp, indexToYm, deepClone } from '../../engine/util.js';
 
@@ -74,6 +74,7 @@ export function renderContracts(ctx) {
     card('契約一覧', h('div', { class: 'alert alert-info' }, '契約は1件ずつ追加するほか、CSVでまとめて取り込めます。「取込用テンプレート」の列（貸手・借手は別々の列）に入力して取り込んでください。既存と同じ契約番号の行は上書きします（条件変更・実績の入力は引き継ぎます）。'), actions, listBox),
     sel ? editor(sel, data) : card(null, emptyState('一覧から契約を選ぶと、ここに編集画面を表示します。')),
     sel ? renderDetail(sel, ctx) : null,
+    companyCard(ctx),
     card(null, tl));
 }
 
@@ -360,7 +361,7 @@ function reportCard(c, sc, ctx) {
   const tot = (f) => mo.reduce((a, r) => a + r[f], 0);
   const hasOther = mo.some((r) => r.other);
   const charts = h('div', { class: 'grid2' },
-    card(null, barChart({ title: '返済スケジュール：元本と利息', subtitle: off ? '短期・少額リース等のため、借手はリース負債を計上していません（支払額は損益グラフの「その他の費用」）' : '支払額＝元本の返済＋利息。利息は期首の残高に割引率を掛けて計算（逓減）', labels, series: off ? [{ name: '支払額', values: v('pay'), color: 'var(--s1)' }] : [{ name: '元本の返済', values: v('principal'), color: 'var(--s1)' }, { name: '利息', values: v('int'), color: 'var(--s4)' }], stacked: true, unit })),
+    card(null, barChart({ title: '返済スケジュール：元本と利息', subtitle: off ? '短期・少額リース等のため、借手はリース負債を計上していません（支払額は損益グラフの「その他の費用」）' : `支払額＝元本の返済＋利息。利息は期首の残高に割引率を掛けて計算（逓減）${rep.unit === 'month' ? '。支払のない月は、未払の利息の分だけ負債が増えるため元本が△になります' : ''}`, labels, series: off ? [{ name: '支払額', values: v('pay'), color: 'var(--s1)' }] : [{ name: '元本の返済', values: v('principal'), color: 'var(--s1)' }, { name: '利息', values: v('int'), color: 'var(--s4)' }], stacked: true, unit })),
     // 帯は「資産合計−負債合計」＝表の「純資産への影響（借手）」と同じ符号
     card(null, lineChart({ title: '借手の貸借対照表：資産合計・負債合計・純資産への影響', subtitle: '資産合計＝使用権資産の簿価、負債合計＝リース負債＋未払。帯＝資産合計−負債合計（借手の純資産への影響。表の同名の列と同じ）', labels, series: [{ name: '資産合計（使用権資産簿価）', values: v('assets'), color: 'var(--s1)' }, { name: '負債合計（リース負債＋未払）', values: v('liabs'), color: 'var(--s2)', dashed: true }], band: { upper: 0, lower: 1, name: '純資産への影響（資産−負債）', color: 'var(--s3)' }, unit })),
     card(null, barChart({ title: '損益への影響：借手の費用と貸手の収益', subtitle: `借手の費用＝減価償却費＋リース負債に係る利息費用${hasOther ? '＋その他の費用（短期・少額リース等の費用、ASC842の単一リース費用、適用開始前の支払リース料）' : ''}、貸手の収益＝受取リース料（定額）`, labels, series: [{ name: '減価償却費', values: v('dep'), color: 'var(--s1)' }, { name: 'リース負債に係る利息費用', values: v('int'), color: 'var(--s4)' }, ...(hasOther ? [{ name: 'その他の費用', values: v('other'), color: 'var(--s8)' }] : [])], stacked: true, line: { name: '貸手の受取リース料', values: v('inc'), color: 'var(--s2)' }, unit })),
@@ -411,4 +412,66 @@ function reportCard(c, sc, ctx) {
       h('span', { class: 'muted small' }, `支払総額 ${fmt(tot('pay'))}${pre ? `（ほかに適用開始前の支払 ${fmt(pre)}）` : ''}、利息総額 ${fmt(tot('int'))}、減価償却費の総額 ${fmt(tot('dep'))}、貸手の収益の総額 ${fmt(tot('inc'))}。表の数値を押すと式${rep.unit === 'year' ? 'と月ごとの内訳' : ''}を表示します`)),
     charts,
     h('div', { class: 'tbl-wrap scroll-y report-tbl' }, table(cols, [...rows, totalRow], { rowClass: (r) => (r.total ? 'total' : r.event ? 'event-row' : ''), className: 'compact' })));
+}
+
+// 会社別の集計の表示（会社・単位）
+const coRep = { co: null, unit: 'year' };
+const coCache = new WeakMap(); // 計算結果（schedCache）ごとの会社別の月次（再描画のたびに計算し直さない）
+
+/** 会社別の集計：その会社が借手・貸手の全契約を合計した返済・償却スケジュールと財務諸表への影響（金額から契約ごとの内訳へ） */
+function companyCard(ctx) {
+  const { data, schedCache, pol, yearPeriods, unit } = ctx;
+  const involved = data.companies.filter((c) => data.contracts.some((k) => k.lesseeCo === c.code || k.lessorCo === c.code));
+  if (!involved.length) return null;
+  if (!coRep.co || !involved.some((c) => c.code === coRep.co)) coRep.co = involved[0].code;
+  const items = data.contracts.filter((c) => schedCache.get(c.id)).map((c) => ({ contract: c, sched: schedCache.get(c.id) }));
+  const excluded = data.contracts.filter((c) => !schedCache.get(c.id) && (c.lesseeCo === coRep.co || c.lessorCo === coRep.co));
+  const cache = coCache.get(schedCache) || coCache.set(schedCache, new Map()).get(schedCache);
+  const mo = cache.get(coRep.co) || cache.set(coRep.co, companyMonthly(items, coRep.co, pol)).get(coRep.co);
+  const rows = coRep.unit === 'month' ? mo.map((r) => ({ ...r, label: indexToJp(r.m) })) : rollupMonthly(mo, yearPeriods);
+  const rerender = () => window.dispatchEvent(new HashChangeEvent('hashchange'));
+  const co = data.companies.find((c) => c.code === coRep.co);
+  const nL = data.contracts.filter((c) => c.lesseeCo === coRep.co).length, nR = data.contracts.filter((c) => c.lessorCo === coRep.co).length;
+  const NAMES = { pay: '支払', principal: '元本', int: '利息', L: '期末リース負債', dep: '減価償却費', assets: '資産合計（使用権資産簿価）', liabs: '負債合計（リース負債＋未払）', lesseeExp: '借手の費用', inc: '貸手の収益', R: '貸手の未収', cumE: 'この会社の純資産修正額（消去差額）', plEffect: 'この会社の連結損益への影響' };
+  const FLOW = new Set(['pay', 'principal', 'int', 'dep', 'lesseeExp', 'inc', 'plEffect']);
+  // 契約ごとの内訳：月の行はその月、年度の行は月の合計（残高は期末の月）
+  const partsOf = (r, key) => {
+    const ms = r.months || [r];
+    const m = new Map();
+    if (FLOW.has(key) && key !== 'plEffect') for (const x of ms) for (const p of x.parts) m.set(p.contract, (m.get(p.contract) || 0) + (p[key] || 0));
+    else if (key === 'plEffect') {
+      const last = ms[ms.length - 1], firstIdx = mo.findIndex((x) => x.m === ms[0].m); // 月の行は写しのため、月の番号で前月を探す
+      const before = firstIdx > 0 ? mo[firstIdx - 1] : null;
+      for (const p of last.parts) m.set(p.contract, (p.cumE || 0) - (before?.parts.find((q) => q.contract === p.contract)?.cumE || 0));
+      for (const p of before?.parts || []) if (!m.has(p.contract)) m.set(p.contract, -(p.cumE || 0));
+    } else for (const p of ms[ms.length - 1].parts) m.set(p.contract, p[key] || 0);
+    return [...m].filter(([, v]) => v).map(([contract, amt]) => ({ contract, role: data.contracts.find((c) => c.id === contract)?.lesseeCo === coRep.co ? '借手' : '貸手', amt }));
+  };
+  const calc = (key) => (r) => {
+    const ps = partsOf(r, key);
+    return { context: `会社別の集計：${coRep.co} ${co?.name || ''}・${r.label}`, title: NAMES[key], value: r[key],
+      breakdown: { title: `契約ごとの内訳（${ps.length}件）`, cols: [{ label: '契約', key: 'contract' }, { label: '立場', key: 'role' }, { label: NAMES[key], key: 'amt', num: true }], rows: [...ps, { contract: '合計', role: '', amt: ps.reduce((a, x) => a + x.amt, 0), total: true }] },
+      notes: [key === 'cumE' ? 'この会社の純資産修正額＝この会社が借手の契約の（リース負債＋未払−使用権資産簿価）−この会社が貸手の契約の未収。消去により連結上この会社の純資産が増減する額です。' : key === 'plEffect' ? 'この会社の純資産修正額の増減＝この会社の連結損益への影響（税引前）です。' : FLOW.has(key) ? '契約ごとの金額の合計です。' : '期末時点の契約ごとの残高の合計です。', r.event ? `イベント：${r.event}` : ''].filter(Boolean),
+      sources: [{ label: '契約・スケジュール' }] };
+  };
+  const num = (k) => ({ label: NAMES[k], key: k, num: true, calc: (r) => calc(k)(r) });
+  const cols = [{ label: coRep.unit === 'month' ? '年月' : '年度', key: 'label', nowrap: true }, ...['pay', 'principal', 'int', 'L', 'dep', 'assets', 'liabs', 'lesseeExp', 'inc', 'R', 'cumE', 'plEffect'].map(num)];
+  const labels = rows.map((r) => (coRep.unit === 'month' ? `${String(Math.floor(r.m / 12)).slice(2)}/${(r.m % 12) + 1}` : r.label.replace('年', '/').replace('月期', '')));
+  const v = (f) => rows.map((r) => r[f]);
+  const seg = h('div', { class: 'seg', role: 'group', 'aria-label': '表示単位' }, [['month', '月次'], ['year', '年度']].map(([k, l]) => h('button', { type: 'button', class: coRep.unit === k ? 'on' : '', on: { click: () => { coRep.unit = k; rerender(); setTimeout(() => document.getElementById('company-report')?.scrollIntoView({ block: 'start' }), 120); } } }, l)));
+  const exportCsv = () => download(`会社別の集計_${coRep.co}_${coRep.unit === 'month' ? '月次' : '年度'}.csv`, toCsv([cols.map((x) => x.label), ...rows.map((r) => cols.map((x) => r[x.key] ?? ''))]), 'text/csv;charset=utf-8');
+  return h('details', { class: 'card', id: 'company-report', open: true },
+    h('summary', null, h('b', null, `会社別の集計：返済・償却スケジュールと財務諸表への影響（${coRep.co} ${co?.name || ''}）`)),
+    h('div', { class: 'alert alert-info' }, `選んだ会社が借手の契約（${nL}件：返済・利息・償却・資産・負債・費用）と、貸手の契約（${nR}件：受取リース料・未収）を合計しています。数値を押すと契約ごとの内訳を表示し、契約番号から各契約の画面へ移れます。`),
+    excluded.length ? h('div', { class: 'alert alert-warn' }, `入力エラーで計算できない契約は集計に含めていません：${excluded.map((c) => c.id).join('、')}（契約一覧の「入力検証」を確認してください）`) : null,
+    h('div', { class: 'actions' },
+      h('label', null, '会社 ', select(involved.map((c) => [c.code, `${c.code} ${c.name}`]), coRep.co, (x) => { coRep.co = x; rerender(); })),
+      h('span', { class: 'fg-label' }, '表示単位'), seg,
+      h('button', { class: 'btn', type: 'button', on: { click: exportCsv } }, '表を書き出す（CSV）')),
+    h('div', { class: 'grid2' },
+      card(null, barChart({ title: '返済スケジュールの合計：元本と利息', subtitle: `この会社が借手の契約の合計${coRep.unit === 'month' ? '。支払のない月は、未払の利息の分だけ負債が増えるため元本が△になります' : ''}`, labels, series: [{ name: '元本の返済', values: v('principal'), color: 'var(--s1)' }, { name: '利息', values: v('int'), color: 'var(--s4)' }], stacked: true, unit })),
+      card(null, lineChart({ title: '貸借対照表の合計：資産合計と負債合計', subtitle: '借手として計上した使用権資産の簿価と、リース負債＋未払。差が借手の純資産への影響', labels, series: [{ name: '資産合計（使用権資産簿価）', values: v('assets'), color: 'var(--s1)' }, { name: '負債合計（リース負債＋未払）', values: v('liabs'), color: 'var(--s2)', dashed: true }], band: { upper: 0, lower: 1, name: '純資産への影響（資産−負債）', color: 'var(--s3)' }, unit })),
+      // 純資産修正額は資産・負債より桁が小さいため、別のグラフで拡大して示す
+      card(null, barChart({ title: '連結への影響：この会社の連結損益（税引前）と純資産修正額', subtitle: '棒：当期（当月）のこの会社の連結損益への影響、線：消去によるこの会社の純資産修正額（累計）', labels, series: [{ name: 'この会社の連結損益への影響', values: v('plEffect'), color: 'var(--s3)' }], line: { name: 'この会社の純資産修正額', values: v('cumE'), color: 'var(--s2)' }, unit }))),
+    h('div', { class: 'tbl-wrap scroll-y report-tbl' }, table(cols, rows, { className: 'compact', rowClass: (r) => (r.event ? 'event-row' : '') })));
 }

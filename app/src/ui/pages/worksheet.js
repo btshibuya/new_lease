@@ -2,7 +2,7 @@ import { h, card, table, amt, statusBadge, download, ask, toast, select } from '
 import { COLORS } from '../components.js';
 import { waterfall, barChart } from '../charts.js';
 import { worksheet, MUST_BE_ZERO, cashFlowEliminations } from '../../engine/reports.js';
-import { NOTE_SECTIONS, BUCKETS, groupNoteAmounts, consolidatedNotes, noteCollectionCsv, importNoteCollection, notePeriodKey } from '../../engine/notes.js';
+import { NOTE_SECTIONS, BUCKETS, groupNoteAmounts, consolidatedNotes, noteCollectionCsv, importNoteCollection, notePeriodKey, noteRows } from '../../engine/notes.js';
 import { update } from '../store.js';
 import { focusJournals } from './journals.js';
 import { contentOrder } from '../components.js';
@@ -35,7 +35,7 @@ export function renderWorksheet(ctx) {
       value: val,
       formula,
       expr: formula.length ? `${formula.filter((f) => typeof f !== 'string').map((f) => fmt(f.value)).join(' ＋ ')} ＝ ${fmt(val)}` : '',
-      breakdown: { title: `内訳（${items.length}件）`, cols: [{ label: '区分', key: 'col' }, { label: '契約', key: 'contract' }, { label: '元の仕訳・計算', key: 'src' }, { label: '金額', key: 'amt', num: true }], rows: [...items.map((x) => ({ ...x, col: COLN[x.col] })), { col: '合計', contract: '', src: '', amt: items.reduce((a, x) => a + x.amt, 0), total: true }] },
+      breakdown: { title: `内訳（${items.length}件）`, cols: [{ label: '区分', key: 'col' }, { label: '契約', key: 'contract' }, { label: '会社', key: 'coName' }, { label: '元の仕訳・計算', key: 'src' }, { label: '金額', key: 'amt', num: true }], rows: [...items.map((x) => ({ ...x, col: COLN[x.col], coName: x.co === 'CONSOL' ? '連結' : x.co })), { col: '合計', contract: '', coName: '', src: '', amt: items.reduce((a, x) => a + x.amt, 0), total: true }] },
       notes: colKey === 'lessee' || colKey === 'lessor' ? ['個別の金額は、契約の条件からアプリが計算した値です。個別帳簿との一致は検算 CHK-10（実績との突合）で確かめます。'] : [],
       sources: [{ label: '契約・スケジュール' }, { label: '仕訳', kind: 'journal' }],
     };
@@ -52,14 +52,17 @@ export function renderWorksheet(ctx) {
     contentCols.push(...[...seen.values()].sort((p, q) => (p.kind === q.kind ? contentOrder(p, q) : p.kind === 'ind' ? -1 : 1)));
     for (const r of ws) { r.byContent = {}; for (const x of r.items) if (x.col === 'ind' || x.col === 'con') { const k = colKeyOf(x); r.byContent[k] = (r.byContent[k] || 0) + x.amt; } }
   }
+  // 元帳・仕訳帳へ移るときは、精算表で選んでいる会社の絞り込みを引き継ぐ
+  const co = view.company === 'all' ? {} : { company: view.company };
+  const coTag = view.company === 'all' ? '' : `・${view.company === 'CONSOL' ? '連結' : view.company}`;
   const links = (r, contentKey) => [
-    { label: `元帳（${r.label}）`, go: () => focusJournals({ account: r.label }) },
-    ...(contentKey && contentKey !== 'OPEN' ? [{ label: `仕訳帳（${contentKey.replace(':', '・')}）`, go: () => focusJournals({ content: contentKey }) }] : contentKey === 'OPEN' ? [{ label: '仕訳帳（開始仕訳・洗替）', go: () => focusJournals({ content: 'OPEN' }) }] : [{ label: '仕訳帳（すべて）', go: () => focusJournals({}) }]),
+    { label: `元帳（${r.label}${coTag}）`, go: () => focusJournals({ account: r.label, ...co }) },
+    ...(contentKey && contentKey !== 'OPEN' ? [{ label: `仕訳帳（${contentKey.replace(':', '・')}${coTag}）`, go: () => focusJournals({ content: contentKey, ...co }) }] : contentKey === 'OPEN' ? [{ label: `仕訳帳（開始仕訳・洗替${coTag}）`, go: () => focusJournals({ content: 'OPEN', ...co }) }] : [{ label: `仕訳帳（すべて${coTag}）`, go: () => focusJournals({ ...co }) }]),
   ];
   const contentInfo = (r, cc) => () => {
     const items = r.items.filter((x) => (x.col === 'ind' || x.col === 'con') && colKeyOf(x) === cc.key && x.amt);
     return { context: `連結精算表・${period.label}（借方＋／貸方△）`, title: `${r.label}：${cc.key === 'OPEN' ? '' : `${cc.key.replace(':', '・')} `}${cc.title}`, value: r.byContent[cc.key] || 0,
-      breakdown: { title: `内訳（${items.length}件）`, cols: [{ label: '契約', key: 'contract' }, { label: '元の仕訳', key: 'src' }, { label: '金額', key: 'amt', num: true }], rows: [...items, { contract: '合計', src: '', amt: items.reduce((a, x) => a + x.amt, 0), total: true }] },
+      breakdown: { title: `内訳（${items.length}件）`, cols: [{ label: '契約', key: 'contract' }, { label: '会社', key: 'coName' }, { label: '元の仕訳', key: 'src' }, { label: '金額', key: 'amt', num: true }], rows: [...items.map((x) => ({ ...x, coName: x.co === 'CONSOL' ? '連結' : x.co })), { contract: '合計', coName: '', src: '', amt: items.reduce((a, x) => a + x.amt, 0), total: true }] },
       sources: [{ label: '仕訳', kind: 'journal' }], links: links(r, cc.key) };
   };
   const split = monthlySplitter(ctx);
@@ -137,6 +140,7 @@ export function renderWorksheet(ctx) {
 }
 
 const OPEN_TPLS = new Set(['C-01', 'C-01T', 'C-01N', 'M-01O']);
+const noteView = { co: 'all' }; // 注記の収集表を書き出す対象の会社
 const splitCache = new WeakMap(); // 計算結果（gen）ごとの月別の仕訳
 const prevCache = new WeakMap(); // 計算結果（gen）ごとの前期末の仕訳
 const contentOf = (j) => (j.src ? `${j.tpl}:${j.src}` : j.tpl);
@@ -388,15 +392,36 @@ function renderNotes(ctx) {
   ]), 'text/csv;charset=utf-8');
 
   const mat = (id) => BUCKETS.map((b) => g.get(`${id}.${b.key}`).amount);
+  // 各社の提出状況：記入済みの項目数（注記額・グループ分・備考のいずれか）。グループ内リースのある会社で未提出のものを目立たせる
+  const statusTable = () => {
+    const nRows = noteRows().length;
+    const involved = new Set(data.contracts.flatMap((c) => [c.lessorCo, c.lesseeCo]));
+    const st = companies.map((c) => {
+      const m = inputs[c.code] || {};
+      const filled = Object.values(m).filter((x) => x && (x.total !== null || x.group !== null || x.memo)).length;
+      return { code: c.code, name: c.name, filled, involved: involved.has(c.code), state: filled === 0 ? '未提出' : '提出済み' };
+    });
+    return h('details', { class: 'basis', open: st.some((x) => x.involved && x.filled === 0) && collected > 0 },
+      h('summary', null, `各社の提出状況（提出済み ${st.filter((x) => x.filled).length}社／${companies.length}社）`),
+      table([
+        { label: '会社', render: (x) => h('td', null, `${x.code} ${x.name}`) },
+        { label: 'グループ内リース', render: (x) => h('td', null, x.involved ? 'あり' : 'なし') },
+        { label: '状態', render: (x) => h('td', null, x.filled ? statusBadge('ok', '提出済み') : x.involved ? statusBadge('ng', '未提出') : h('span', { class: 'muted' }, '未提出')) },
+        { label: '記入済みの項目', render: (x) => h('td', { class: 'num' }, `${x.filled}／${nRows}`) },
+      ], st, { className: 'compact' }));
+  };
   return card('注記（新リース会計基準）',
     h('div', { class: 'alert alert-info' }, '開示目的は、リースが財政状態・経営成績・キャッシュ・フローに与える影響を財務諸表利用者が評価するための情報を提供することです（会計基準第54項）。会計方針に関する情報（適用指針第97項）は文章で記載するため、この表の対象外です。重要性に乏しい事項は記載を省略できます（会計基準第55項ただし書き）。'),
     h('div', { class: 'alert alert-info' }, '連結の注記額＝各社の個別の注記額の合計−うちグループ内リース分。①「収集表を書き出す」で各社に配る表（項目ごとに、どのような情報か・根拠の項を記載）を作り、②各社が「各社の注記額」（グループ会社とのリースも含めた個別の注記額）と、アプリで計算しない項目の「うちグループ会社とのリース分」を記入し、③「記入済みの収集表を読み込む」で取り込みます。「アプリで計算」の項目のグループ内リース分は契約から自動で計算します。金額を押すと会社・契約ごとの内訳を表示します。'),
     h('div', { class: 'actions' },
-      h('button', { class: 'btn btn-primary', type: 'button', on: { click: () => download(`注記の収集表_${period.label}.csv`, noteCollectionCsv(companies, period, g, inputs), 'text/csv;charset=utf-8') } }, '① 収集表を書き出す（CSV）'),
+      // 収集表は全社まとめて、または会社ごとに（各社に配るため）書き出せる
+      h('label', null, '対象 ', select([['all', 'すべての会社（1ファイル）'], ...companies.map((c) => [c.code, `${c.code} ${c.name}`])], noteView.co, (v) => { noteView.co = v; })),
+      h('button', { class: 'btn btn-primary', type: 'button', on: { click: () => { const cs = noteView.co === 'all' ? companies : companies.filter((c) => c.code === noteView.co); download(`注記の収集表_${period.label}${noteView.co === 'all' ? '' : `_${noteView.co}`}.csv`, noteCollectionCsv(cs, period, g, inputs), 'text/csv;charset=utf-8'); } } }, '① 収集表を書き出す（CSV）'),
       h('button', { class: 'btn', type: 'button', on: { click: () => fileInput.click() } }, '③ 記入済みの収集表を読み込む'), fileInput,
       h('button', { class: 'btn', type: 'button', on: { click: exportTable } }, '注記の表を書き出す（CSV）'),
       collected ? h('button', { class: 'btn btn-danger', type: 'button', on: { click: async () => { if (await ask({ title: `${period.label}の収集値を消去しますか？`, message: `${collected}社分の収集値を消去します。グループ内リース分（アプリの計算値）は消えません。`, okLabel: '消去する', danger: true })) update((d) => { delete d.noteInputs[pk]; }, '注記の収集値の消去', period.label); } } }, 'この期間の収集値を消去') : null,
       h('span', { class: 'muted' }, collected ? `収集済み：${collected}社／${companies.length}社` : '収集値はまだありません（各社の注記額の列は「未収集」）')),
+    statusTable(),
     tableEl,
     barChart({ wide: true, title: '決算日後の期間別：グループ内の借手のリース料と貸手の受取リース料', subtitle: '同じ契約の支払と受取のため、借手の短期・少額リース等や貸手のリース期間の違いを除けばほぼ一致します', labels: BUCKETS.map((b) => b.label), series: [{ name: '借手：リース負債の返済予定額（割引前）', values: mat('X-LL'), color: COLORS.lessee }, { name: '借手：元本', values: mat('X-LLP'), color: 'var(--s5)' }, { name: '貸手：リース料の回収予定額', values: mat('R-MAT'), color: COLORS.lessor }], unit, height: 240 }));
 }

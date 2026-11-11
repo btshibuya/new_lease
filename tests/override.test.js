@@ -201,3 +201,25 @@ test('手修正：累計の期間どうしなど期間が重なる手修正は�
   const c18 = runChecks(data, next, pol, g).find((c) => c.id === 'CHK-18');
   assert.ok(c18.rows.some((r) => /期間が重なる手修正/.test(r.message)));
 });
+
+import { companyMonthly } from '../app/src/engine/reports.js';
+
+test('会社別の集計：全社の借手の項目の合計＝全契約の合計、会社の純資産修正額の合計＝全契約の消去差額、年度に集計しても一致', () => {
+  const items = base.contracts.map((c) => ({ contract: c, sched: buildSchedule(c, pol, { lesseeCompany: base.companies.find((x) => x.code === c.lesseeCo) }) }));
+  const byM = new Map();
+  for (const { sched } of items) for (const r of contractMonthly(sched, pol)) { const o = byM.get(r.m) || { int: 0, dep: 0, L: 0, inc: 0, cumE: 0, pay: 0 }; for (const k of Object.keys(o)) o[k] += r[k]; byM.set(r.m, o); }
+  const tot = new Map();
+  for (const co of base.companies.map((c) => c.code)) for (const r of companyMonthly(items, co, pol)) {
+    const o = tot.get(r.m) || { int: 0, dep: 0, L: 0, inc: 0, cumE: 0, pay: 0 };
+    for (const k of Object.keys(o)) o[k] += r[k];
+    tot.set(r.m, o);
+    // 契約ごとの内訳の合計＝会社の行
+    for (const k of ['int', 'L', 'inc', 'cumE']) assert.equal(r.parts.reduce((a, p) => a + (p[k] || 0), 0), r[k], `${co} ${r.m} ${k}`);
+  }
+  for (const [m, o] of byM) assert.deepEqual(tot.get(m), o, `月 ${m}`);
+  const YRS = buildPeriods(ymToIndex('2024-04'), ymToIndex('2040-03'), 3, 'year');
+  const s1 = companyMonthly(items, 'S1', pol);
+  const y = rollupMonthly(s1, YRS);
+  for (const r of y) assert.ok(Number.isFinite(r.pay) && Number.isFinite(r.plEffect), r.label);
+  assert.equal(y.reduce((a, r) => a + r.plEffect, 0), s1[s1.length - 1].cumE - (s1[0].cumE - s1[0].plEffect));
+});

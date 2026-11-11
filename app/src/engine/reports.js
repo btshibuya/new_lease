@@ -282,3 +282,45 @@ export function rollupMonthly(rows, periods) {
     return o;
   }).filter(Boolean);
 }
+
+/**
+ * 会社別の集計：その会社が借手の契約（返済・利息・償却・資産・負債・費用）と、貸手の契約（受取リース料・未収）を月ごとに合計する。
+ * 会社の純資産修正額（消去差額のうちこの会社の分）と、その増減（この会社の連結損益への影響）も求める。
+ * 各行の parts に契約ごとの金額を残す（ドリルダウン用）。
+ * @param items [{ contract, sched }]
+ */
+export function companyMonthly(items, code, pol) {
+  const LESSEE = ['pay', 'principal', 'int', 'dep', 'other', 'lesseeExp', 'L', 'X', 'rou', 'liabs'];
+  const LESSOR = ['inc', 'R'];
+  const mine = items.filter(({ contract: c }) => c.lesseeCo === code || c.lessorCo === code);
+  if (!mine.length) return [];
+  const rows = new Map();
+  const blank = (m) => ({ m, pay: 0, prePay: 0, principal: 0, int: 0, dep: 0, other: 0, lesseeExp: 0, L: 0, X: 0, rou: 0, liabs: 0, assets: 0, equity: 0, inc: 0, R: 0, cumE: 0, plEffect: 0, event: '', parts: [] });
+  let lo = Infinity, hi = -Infinity;
+  for (const { contract: c, sched } of mine) {
+    const mo = contractMonthly(sched, pol);
+    const isL = c.lesseeCo === code, isR = c.lessorCo === code;
+    for (const r of mo) {
+      lo = Math.min(lo, r.m); hi = Math.max(hi, r.m);
+      const row = rows.get(r.m) || rows.set(r.m, blank(r.m)).get(r.m);
+      const part = { contract: c.id, role: isL && isR ? '借手・貸手' : isL ? '借手' : '貸手', eventText: r.event };
+      if (isL) for (const k of LESSEE) { row[k] += r[k]; part[k] = r[k]; }
+      if (isR) for (const k of LESSOR) { row[k] += r[k]; part[k] = r[k]; }
+      const e = eFromSchedule(sched, r.m, pol)[code] || 0;
+      row.cumE += e; part.cumE = e;
+      row.parts.push(part);
+      if (r.event) row.event = [...new Set([...(row.event ? row.event.split('・') : []), `${c.id} ${r.event}`])].join('・');
+    }
+  }
+  const out = [];
+  let prev = 0;
+  for (let m = lo; m <= hi; m++) {
+    const row = rows.get(m) || blank(m);
+    row.assets = row.rou;
+    row.equity = row.rou - row.liabs;
+    row.plEffect = row.cumE - prev;
+    prev = row.cumE;
+    out.push(row);
+  }
+  return out;
+}
