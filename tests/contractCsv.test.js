@@ -117,8 +117,10 @@ test('注記：収集表を書き出し、記入して読み込むと、連結�
   const csv = noteCollectionCsv(data.companies, p, g);
   const rows = parseCsv(csv);
   assert.equal(rows.length, 1 + data.companies.length * noteRows().length);
-  assert.ok(rows[1][10].length > 20, 'どのような情報かの説明がある');
-  assert.match(rows[1][6], /適用指針第99項〜第101項/);
+  const nbvRow = rows.find((r) => r[4] === 'L-NBV.building');
+  assert.ok(nbvRow[10].length > 20, 'どのような情報かの説明がある');
+  assert.match(nbvRow[6], /適用指針第99項〜第101項/);
+  assert.match(rows.find((r) => r[4] === 'L-LIAB.cur')[6], /会計基準第49項〜第51項/);
   const H = rows[0];
   const col = (l) => H.indexOf(l);
   // P の使用権資産（建物）の注記額 100,000、S1 の変動リース料 500（うちグループ 120）を記入
@@ -154,4 +156,33 @@ test('注記：収集表の誤り（別の期間・未登録の会社・数値�
   assert.match(r.errors[0], /^2行目：決算期末/);
   assert.match(r.errors[1], /^3行目：会社コード「ZZ」/);
   assert.match(r.errors[2], /^4行目/);
+});
+
+test('注記：リース負債が含まれる科目と金額（流動＋固定）＝精算表の借手のリース負債、リース負債に係る利息費用＝精算表の利息費用（日本基準の契約）', () => {
+  for (const p of FY.slice(0, 4)) {
+    const gen = generateAll(data, p, pol);
+    const g = groupNoteAmounts(gen, p, pol);
+    const ws = worksheet(gen, data.companies, pol, {}, p);
+    const L = -ws.filter((r) => ['LL_C', 'LL_NC', 'LEGACY_LIAB', 'LEGACY_LIAB_C'].includes(r.acc)).reduce((a, r) => a + r.lessee + r.ind, 0);
+    assert.equal(g.get('L-LIAB.cur').amount + g.get('L-LIAB.nc').amount, L, `${p.label} リース負債`);
+    const cur = -ws.filter((r) => ['LL_C', 'LEGACY_LIAB_C'].includes(r.acc)).reduce((a, r) => a + r.lessee + r.ind, 0);
+    assert.equal(g.get('L-LIAB.cur').amount, cur, `${p.label} うち流動`);
+  }
+});
+
+test('連結精算表：会社で抽出した表を全社分（連結の組替を含む）足すと、全社の表と一致し、会社ごとにもグループ内の科目は連結後0', () => {
+  for (const p of FY.slice(0, 3)) {
+    const gen = generateAll(data, p, pol);
+    const all = worksheet(gen, data.companies, pol, {}, p);
+    const sum = new Map();
+    for (const co of [...data.companies.map((c) => c.code), 'CONSOL']) {
+      for (const r of worksheet(gen, data.companies, pol, {}, p, { company: co })) {
+        const s = sum.get(r.label) || { lessee: 0, lessor: 0, ind: 0, con: 0, consol: 0 };
+        for (const k of Object.keys(s)) s[k] += r[k];
+        sum.set(r.label, s);
+        if (['ROU_COST', 'ROU_ACC', 'LL_C', 'LL_NC', 'LEASE_INC', 'INT', 'DEP_ROU'].includes(r.acc)) assert.equal(r.consol, 0, `${p.label} ${co} ${r.label}`);
+      }
+    }
+    for (const r of all) for (const k of ['lessee', 'lessor', 'ind', 'con', 'consol']) assert.equal(sum.get(r.label)?.[k] || 0, r[k], `${p.label} ${r.label} ${k}`);
+  }
 });

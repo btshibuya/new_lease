@@ -165,7 +165,7 @@ function exampleGrid(def) {
       const m12 = sc.months.slice(0, 12);
       parts.push(table([{ label: '項目', key: 'a' }, { label: '金額', key: 'b', num: true }], [
         { a: '当初リース負債', b: sc.meta.L0 },
-        { a: '1年目の支払利息', b: m12.reduce((a, x) => a + x.lessee.int, 0) },
+        { a: '1年目のリース負債に係る利息費用', b: m12.reduce((a, x) => a + x.lessee.int, 0) },
         { a: '1年目末のリース負債', b: m12[11].lessee.L_end },
         { a: '利息総額', b: sc.meta.totalInterest },
         { a: '最終回の端数調整額', b: sc.meta.finalResidual || 0 },

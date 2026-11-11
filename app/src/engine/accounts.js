@@ -17,7 +17,7 @@ export const ACCOUNTS = {
   LEGACY_LIAB: { name: 'リース債務（固定・個別の旧科目）', type: 'BS', side: 'L', group: '負債' },
   // ── 借手（PL） ──
   DEP_ROU: { name: '減価償却費（使用権資産）', type: 'PL', side: 'L', group: '費用' },
-  INT: { name: '支払利息', type: 'PL', side: 'L', group: '費用' },
+  INT: { name: 'リース負債に係る利息費用', type: 'PL', side: 'L', group: '費用' },
   ASC_COST: { name: 'リース費用（ASC842 単一リース費用）', type: 'PL', side: 'L', group: '費用' },
   SHORT_COST: { name: 'リース費用（短期・少額リース等）', type: 'PL', side: 'L', group: '費用' },
   PRE_RENT: { name: '支払リース料（適用開始前・旧基準）', type: 'PL', side: 'L', group: '費用' },

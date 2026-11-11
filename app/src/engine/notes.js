@@ -17,10 +17,12 @@ export const BUCKETS = [
 
 /** 情報の区分（見出し）。ref は企業会計基準適用指針第33号の項 */
 export const NOTE_SECTIONS = [
+  { id: 'L-P', side: '借手', title: '表示に関する注記（使用権資産・リース負債を区分表示しない場合）', ref: '会計基準第49項〜第51項' },
   { id: 'L-A', side: '借手', title: 'リース特有の取引に関する情報', ref: '適用指針第99項〜第101項' },
   { id: 'L-B', side: '借手', title: '当期及び翌期以降のリースの金額を理解するための情報', ref: '適用指針第102項' },
   { id: 'R-A', side: '貸手', title: 'リース特有の取引に関する情報', ref: '適用指針第103項〜第105項' },
   { id: 'R-B', side: '貸手', title: '当期及び翌期以降のリースの金額を理解するための情報', ref: '適用指針第106項〜第109項' },
+  { id: 'O', side: '借手・貸手', title: '該当する取引がある場合の注記（セール・アンド・リースバック、サブリース）', ref: '適用指針（項番号は原文で確認）' },
   { id: 'X', side: '関連', title: '関連する他の注記・附属明細表（参考）', ref: 'リースの注記以外' },
 ];
 
@@ -29,6 +31,8 @@ export const NOTE_SECTIONS = [
  * byClass：原資産の表示科目ごと、byBucket：決算日後の期間ごと
  */
 export const NOTE_ITEMS = [
+  { id: 'L-LIAB', sec: 'L-P', title: 'リース負債が含まれる科目と金額', when: '期末', kind: 'calc', byList: [['cur', '流動（1年以内）'], ['nc', '固定（1年超）']],
+    desc: '貸借対照表でリース負債を区分して表示しない場合に、リース負債が含まれる科目（流動負債の「その他」、固定負債の「その他」など）と金額を注記します。使用権資産を区分して表示しない場合は、上の「科目ごとの使用権資産の帳簿価額」で含まれる科目と金額を示します。グループ内の分は、借手の期末のリース負債（流動・固定）です。' },
   { id: 'L-NBV', sec: 'L-A', title: '科目ごとの使用権資産の帳簿価額', when: '期末', kind: 'calc', byClass: true,
     desc: '期末の使用権資産の帳簿価額（取得原価−減価償却累計額）を、対応する原資産を自ら所有していたと仮定した場合に表示する科目（建物、機械装置など）ごとに記載します。' },
   { id: 'L-SHORT', sec: 'L-A', title: '短期リースに係る費用', when: '当期', kind: 'calc',
@@ -51,6 +55,12 @@ export const NOTE_ITEMS = [
     desc: 'リース債権・リース投資資産の残高に重要な変動があった場合に、その内容を文章で記載します。グループ内の分はありません。収集表では「備考」に記入します。' },
   { id: 'R-MAT', sec: 'R-B', title: 'リース料の回収予定額（決算日後5年以内は1年ごと、5年超）', when: '期末', kind: 'calc', byBucket: true,
     desc: '決算日後に回収（受取）する予定のリース料（割引前）を、5年以内は1年ごと、5年超はまとめて記載します。オペレーティング・リースは将来の受取リース料、ファイナンス・リースはリース債権・リース投資資産に係るリース料です。グループ内の分は、オペレーティング・リースの将来の受取リース料です。' },
+  { id: 'O-SLB', sec: 'O', title: 'セール・アンド・リースバック取引', when: '当期', kind: 'input',
+    desc: '資産を売却し、同じ資産をリースバックする取引について、取引の内容や売却損益などを注記します（該当する場合）。グループ会社との間で行った取引は連結上消去するため、各社の注記額のうちグループ会社との取引の分を「うちグループ会社とのリース分」に記入します。注記の要否・項番号は基準の原文で確認してください。' },
+  { id: 'O-SUB', sec: 'O', title: 'サブリース取引（転リース）', when: '当期', kind: 'input',
+    desc: '借手が原資産をさらに第三者にリースするサブリース取引について、その内容や収益などを注記します（該当する場合）。グループ外から借りた資産をグループ会社に転貸している場合など、グループ会社とのサブリースの分を「うちグループ会社とのリース分」に記入します。注記の要否・項番号は基準の原文で確認してください。' },
+  { id: 'X-INT', sec: 'X', title: 'リース負債に係る利息費用', when: '当期', kind: 'calc',
+    desc: '借手がリース負債について計上した利息費用（損益計算書の支払利息等に含まれる額）です。リースが経営成績に与える影響を説明する資料に使います。グループ内の分は、借手が計上したリース負債に係る利息費用（日本基準・IFRS第16号の契約）です。' },
   { id: 'X-LL', sec: 'X', title: 'リース負債の返済予定額（割引前）', when: '期末', kind: 'calc', byBucket: true,
     desc: '借手のリース負債について、決算日後の支払予定額（割引前）です。金融商品の時価等に関する注記の返済予定額に使います。' },
   { id: 'X-LLP', sec: 'X', title: 'リース負債の返済予定額（元本）', when: '期末', kind: 'calc', byBucket: true,
@@ -67,6 +77,7 @@ export function noteRows() {
   for (const it of NOTE_ITEMS) {
     if (it.byClass) for (const [k, l] of Object.entries(ASSET_CLASS_LABELS)) rows.push({ key: `${it.id}.${k}`, item: it, sub: l });
     else if (it.byBucket) for (const b of BUCKETS) rows.push({ key: `${it.id}.${b.key}`, item: it, sub: b.label });
+    else if (it.byList) for (const [k, l] of it.byList) rows.push({ key: `${it.id}.${k}`, item: it, sub: l });
     else rows.push({ key: it.id, item: it, sub: '' });
   }
   return rows;
@@ -99,6 +110,8 @@ export function groupNoteAmounts(gen, period, pol) {
       const rm = inP.reduce((a, x) => a + (x.lessee.remeasure ? Math.max(0, x.lessee.remeasure.dL) : 0), 0);
       push('L-ADD', c, c.lesseeCo, cm + rm, rm ? `条件変更による増加 ${rm} を含む` : '');
       push(`L-DEP.${cls}`, c, c.lesseeCo, ps.dep);
+      if (alive) { push('L-LIAB.cur', c, c.lesseeCo, r.cur || 0); push('L-LIAB.nc', c, c.lesseeCo, ps.close.L - (r.cur || 0)); }
+      if (model === 'jgaap') push('X-INT', c, c.lesseeCo, (ps.int || 0) + (ps.accr || 0));
     } else if ((c.lessee.offKind || 'short') === 'short') push('L-SHORT', c, c.lesseeCo, ps.cost);
     const pen = inP.reduce((a, x) => a + (x.lessee.penalty || 0), 0);
     push('L-CASH', c, c.lesseeCo, inP.reduce((a, x) => a + (x.lessor.cash || 0), 0) + pen, pen ? `解約違約金 ${pen} を含む` : '');

@@ -41,7 +41,7 @@ export const CARRY_MODES = { carry_reverse: '繰越あり－洗替あり', carry
 export const CARRY_DEFS = [
   { tpl: 'C-02', default: 'carry', re: true, why: 'リース開始時の取消。初期直接費用・前払リース料・適用時の累積的影響額があると、利益剰余金に影響します。' },
   { tpl: 'C-03', default: 'carry', re: true, why: '減価償却費の取消は損益に影響し、その累計は翌期の利益剰余金期首になります。' },
-  { tpl: 'C-04', default: 'carry', re: true, why: '支払利息・受取リース料の取消は損益に影響し、その累計は翌期の利益剰余金期首になります。' },
+  { tpl: 'C-04', default: 'carry', re: true, why: 'リース負債に係る利息費用・受取リース料の取消は損益に影響し、その累計は翌期の利益剰余金期首になります。' },
   { tpl: 'C-20', default: 'carry', re: true, why: '条件変更の損益の取消は、翌期の利益剰余金期首に影響します。' },
   { tpl: 'C-17', default: 'carry', re: true, why: '解約損益・違約金の取消は、翌期の利益剰余金期首に影響します。' },
   { tpl: 'C-13', default: 'carry', re: true, why: '法人税等調整額は損益に影響し、繰延税金資産（負債）の残高を引き継ぐ必要があります。' },
@@ -117,8 +117,8 @@ export function monthReversals(rec, sched, pol) {
     if (le.int) {
       out.push({ tpl: 'C-04', lines: [
         ln('LL_NC', lesseeCo, le.int, meta, `利息＝支払間の期首残高 × 利率 ${pct(sched.meta.rp)}／期間（${sched.meta.nominal ? '期間内は定額按分' : '期間内は複利按分'}）`),
-        ln('INT', lesseeCo, -le.int, meta, '借手が計上した支払利息'),
-      ], note: `${when} 支払利息の取消` });
+        ln('INT', lesseeCo, -le.int, meta, '借手が計上したリース負債に係る利息費用'),
+      ], note: `${when} リース負債に係る利息費用の取消` });
     }
   }
   if (model === 'asc842ol' && le.active && le.cost) {

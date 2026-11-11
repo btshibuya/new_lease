@@ -11,7 +11,7 @@ import { toCsv, sanitizeManual } from '../../engine/data.js';
 import { fmt, indexToYm, indexToJp } from '../../engine/util.js';
 
 // 表示の状態（画面を移っても保つ）
-const filter = { kind: 'all', contract: 'all', content: 'all', account: '', mode: 'contract', q: '' };
+const filter = { kind: 'all', contract: 'all', content: 'all', account: '', mode: 'contract', q: '', company: 'all' };
 const MODES = [['contract', '契約単位'], ['company', '会社単位'], ['total', '合計']];
 // 「元の画面へ戻る」で仕訳帳の絞り込みも戻す
 setRestoreHook({ save: () => ({ ...filter }), load: (x) => Object.assign(filter, x) });
@@ -20,7 +20,7 @@ setRestoreHook({ save: () => ({ ...filter }), load: (x) => Object.assign(filter,
 export function focusJournals(opts = {}) {
   guard(() => {
     rememberReturn();
-    Object.assign(filter, { kind: 'all', contract: 'all', content: 'all', account: '', q: '' }, opts);
+    Object.assign(filter, { kind: 'all', contract: 'all', content: 'all', account: '', q: '', company: 'all' }, opts);
     if (location.hash === '#journals') window.dispatchEvent(new HashChangeEvent('hashchange'));
     else location.hash = '#journals';
     setTimeout(() => document.getElementById(opts.account ? 'ledger' : 'journal-book')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
@@ -34,8 +34,10 @@ export function renderJournals(ctx) {
   // 金額・科目名で探す：帳簿の金額（桁区切り・△可）または科目名の一部から、その金額・科目を含む仕訳を逆引きする
   const qNum = (() => { const t = filter.q.replace(/[,，\s円]/g, '').replace(/^[△▲-]/, ''); return /^\d+(\.\d+)?$/.test(t) ? Number(t) : null; })();
   const qHit = (j) => !filter.q || j.lines.some((l) => (qNum !== null ? Math.abs(l.amt) === qNum : accountLabel(l, pol, names).includes(filter.q.trim())));
-  const js = gen.journals.filter((j) => match(j) && qHit(j));
-  const lines = js.flatMap((j) => j.lines);
+  // 会社で抽出：その会社の行を含む仕訳。集計・元帳・CSV はその会社の行だけ（連結＝会社に属さない組替の行）
+  const lineOk = (l) => filter.company === 'all' || l.co === filter.company;
+  const js = gen.journals.filter((j) => match(j) && qHit(j) && j.lines.some(lineOk));
+  const lines = js.flatMap((j) => j.lines).filter(lineOk);
   const pl = lines.filter((l) => ACCOUNTS[l.acc]?.type === 'PL' && !['TAX_ADJ', 'NCI_PL'].includes(l.acc)).reduce((a, l) => a - l.amt, 0);
   const tax = lines.filter((l) => l.acc === 'TAX_ADJ').reduce((a, l) => a + l.amt, 0);
   const dr = lines.filter((l) => l.amt > 0).reduce((a, l) => a + l.amt, 0);
@@ -46,10 +48,11 @@ export function renderJournals(ctx) {
     h('span', { class: 'fg-label' }, '表示単位'), seg,
     h('label', null, '区分 ', select([['all', 'すべて'], ['IND', '個社修正'], ['CON', '連結修正']], filter.kind, (v) => { filter.kind = v; rerender(); })),
     h('label', null, '内容 ', select([['all', 'すべて'], ['OPEN', '開始仕訳・洗替（すべて）'], ...contents.map(([k, t]) => [k, `${k.replace(':', '・')} ${t}`])], filter.content, (v) => { filter.content = v; rerender(); })),
+    h('label', null, '会社 ', select([['all', 'すべての会社'], ...companies.map((c) => [c.code, `${c.code} ${c.name}`]), ['CONSOL', '連結（会社に属さない組替）']], filter.company, (v) => { filter.company = v; rerender(); })),
     h('label', null, '契約 ', select([['all', 'すべて'], ...data.contracts.map((c) => [c.id, `${c.id} ${c.name}`])], filter.contract, (v) => { filter.contract = v; rerender(); })),
-    h('label', null, '金額・科目で探す ', h('input', { type: 'search', value: filter.q, placeholder: '例）4,580 または 支払利息', 'aria-label': '金額・科目で探す', class: 'q-input', on: { change: (e) => { filter.q = e.target.value; rerender(); } } })),
+    h('label', null, '金額・科目で探す ', h('input', { type: 'search', value: filter.q, placeholder: '例）4,580 または リース負債に係る利息費用', 'aria-label': '金額・科目で探す', class: 'q-input', on: { change: (e) => { filter.q = e.target.value; rerender(); } } })),
     filter.q ? h('span', { class: 'muted small' }, `「${filter.q}」を含む仕訳 ${js.length}本`, ' ', h('button', { class: 'btn-link', type: 'button', on: { click: () => { filter.q = ''; rerender(); } } }, '解除')) : null,
-    h('button', { class: 'btn', type: 'button', on: { click: () => exportCsv(js, ctx) } }, '仕訳帳を書き出す（CSV）'));
+    h('button', { class: 'btn', type: 'button', on: { click: () => exportCsv(js, ctx, lineOk) } }, filter.company === 'all' ? '仕訳帳を書き出す（CSV）' : '仕訳帳を書き出す（CSV：この会社の行）'));
 
   // 金額の確認からのリンク：元帳と、その行（科目・会社）に金額のある契約の登録画面。6件以上なら候補から選ぶ
   const links = (l, j) => {
@@ -68,14 +71,15 @@ export function renderJournals(ctx) {
     h('button', { class: 'btn btn-sm', type: 'button', on: { click: () => chooseAndGo(`根拠の画面へ：${j.src ? `${j.tpl}・${j.src}` : j.tpl} ${j.title}`, relatedCandidates(j, ctx)) } }, '根拠の画面へ'),
     !j.parts && !j.manual && !j.carriedOverride ? h('button', { class: 'btn btn-sm', type: 'button', on: { click: () => editOverride(j, ctx) } }, j.override ? '手修正を編集' : '金額を修正') : null,
   ];
-  const hl = filter.q ? (l) => (qNum !== null ? Math.abs(l.amt) === qNum : accountLabel(l, pol, names).includes(filter.q.trim())) : null;
+  const qMatch = (l) => (qNum !== null ? Math.abs(l.amt) === qNum : accountLabel(l, pol, names).includes(filter.q.trim()));
+  const hl = filter.q || filter.company !== 'all' ? (l) => (!filter.q || qMatch(l)) && lineOk(l) : null;
   const cards = (arr) => h('div', { class: 'journals' }, arr.map((j) => journalCard(j, { pol, names, companies }, { links, actions, hl, notice: (x) => overrideNotice(x, ctx) })));
   const modeNote = { contract: '契約ごとに、内容別の仕訳を表示しています。', company: '内容ごとに、会社（貸手→借手の組合せ。個社修正は会社）単位で合算して表示しています。', total: '内容ごとに、全契約を合算して表示しています。「会社別・契約別の内訳を表示」でドリルダウンできます。' }[filter.mode];
 
   return h('div', { class: 'page' },
     h('div', { class: 'kpi' },
       kpi('仕訳本数', `${grouped.length} 本`, filter.mode === 'contract' ? `個社修正 ${js.filter((j) => j.kind === 'IND').length}／連結修正 ${js.filter((j) => j.kind === 'CON').length}` : `元の仕訳 ${js.length} 本を合算`),
-      kpi('借方合計 ／ 貸方合計', `${fmt(dr)} ／ ${fmt(cr)}`, dr === cr ? '一致' : '不一致'),
+      kpi(filter.company === 'all' ? '借方合計 ／ 貸方合計' : `借方合計 ／ 貸方合計（${filter.company === 'CONSOL' ? '連結' : filter.company} の行）`, `${fmt(dr)} ／ ${fmt(cr)}`, filter.company === 'all' ? (dr === cr ? '一致' : '不一致') : '会社の行だけのため一致しないことがあります（仕訳全体では一致）'),
       kpi('当期の損益への影響（税引前）', fmt(pl), '表示中の仕訳による連結利益の増減'),
       kpi('法人税等調整額', fmt(tax), '＋は税金費用の増加')),
     card(null, controls, filterChips(data), h('p', { class: 'muted small' }, modeNote)),
@@ -86,8 +90,8 @@ export function renderJournals(ctx) {
       h('h3', null, `当期の仕訳：${current.length}本`),
       current.length ? cards(current) : emptyState('該当する仕訳はありません')),
     nextOpeningCard(ctx, match),
-    summaryCard(js, ctx),
-    ledgerCard(js, ctx),
+    summaryCard(js, ctx, lineOk),
+    ledgerCard(js, ctx, lineOk),
     manualCard(ctx));
 }
 
@@ -155,7 +159,7 @@ function nextOpeningCard(ctx, match) {
       g.trace.push(...tr.filter((x) => (x.co === 'CONSOL' ? j.lessorCo : x.co) === co).map((x) => ({ ...x, contract: j.contractId })));
     }
   }
-  const list = [...groups.values()].sort((a, b) => contentOrder(a.j0, b.j0) || String(a.co).localeCompare(String(b.co)));
+  const list = [...groups.values()].filter((g) => filter.company === 'all' || g.co === filter.company).sort((a, b) => contentOrder(a.j0, b.j0) || String(a.co).localeCompare(String(b.co)));
   const coName = (code) => (code === 'CONSOL' ? '連結' : companies.find((c) => c.code === code)?.name || code);
   const cardsEl = list.map((g) => {
     const agg = { id: `N-${contentKey(g.j0)}-${g.co}`, tpl: g.j0.tpl, src: g.j0.src, kind: g.j0.kind, title: contentName(g.j0), company: g.co, groupLabel: `${coName(g.co)}：${g.parts.length}契約`, lines: aggregateLines(g.parts.flatMap((p) => p.lines), pol, names), parts: g.parts };
@@ -177,11 +181,11 @@ function nextOpeningCard(ctx, match) {
 }
 
 /** 科目別集計表（内容別）：科目×仕訳の内容。借方＋／貸方△ */
-function summaryCard(js, ctx) {
+function summaryCard(js, ctx, lineOk = () => true) {
   const { pol, names, companies, period } = ctx;
   const cols = [...new Map([...js].sort(contentOrder).map((j) => [contentKey(j), j])).values()];
   const accs = new Map();
-  for (const j of js) for (const l of j.lines) {
+  for (const j of js) for (const l of j.lines.filter(lineOk)) {
     const a = accountLabel(l, pol, names);
     const row = accs.get(a) || accs.set(a, { label: a, type: ACCOUNTS[l.acc]?.type, acc: l.acc, v: {}, items: {} }).get(a);
     const k = contentKey(j);
@@ -211,14 +215,14 @@ function summaryCard(js, ctx) {
 }
 
 /** 元帳（勘定科目別）：T勘定と明細 */
-function ledgerCard(js, ctx) {
+function ledgerCard(js, ctx, lineOk = () => true) {
   const { pol, names, companies } = ctx;
   const rerender = () => window.dispatchEvent(new HashChangeEvent('hashchange'));
-  const accLabels = [...new Set(js.flatMap((j) => j.lines.map((l) => accountLabel(l, pol, names))))].sort();
+  const accLabels = [...new Set(js.flatMap((j) => j.lines.filter(lineOk).map((l) => accountLabel(l, pol, names))))].sort();
   const tSel = h('label', null, '科目 ', select([['', '— 科目を選択 —'], ...accLabels.map((a) => [a, a])], filter.account, (v) => { filter.account = v; rerender(); }));
   if (!filter.account) return h('section', { class: 'card', id: 'ledger' }, h('h2', null, '元帳（勘定科目別の明細）'), tSel, emptyState('科目を選ぶと、借方・貸方の明細を元帳（T勘定）形式で表示します。'));
   const coName = (code) => (code === 'CONSOL' ? '連結' : companies.find((c) => c.code === code)?.name || code);
-  const items = [...js].sort(contentOrder).flatMap((j) => j.lines.filter((l) => accountLabel(l, pol, names) === filter.account).map((l) => ({ j, l })));
+  const items = [...js].sort(contentOrder).flatMap((j) => j.lines.filter((l) => lineOk(l) && accountLabel(l, pol, names) === filter.account).map((l) => ({ j, l })));
   const td = items.filter((x) => x.l.amt > 0).reduce((a, x) => a + x.l.amt, 0), tc = -items.filter((x) => x.l.amt < 0).reduce((a, x) => a + x.l.amt, 0);
   let bal = 0;
   const rows = items.map(({ j, l }) => { bal += l.amt; return h('tr', null, h('td', { class: 'nw' }, j.src ? `${j.tpl}・${j.src}` : j.tpl), h('td', null, contentName(j)), h('td', { class: 'nw' }, j.manual || !j.contractId || j.contractId === '—' ? '手入力' : h('button', { class: 'btn-link contract-link', type: 'button', title: '契約の登録画面を開く', on: { click: () => goTo({ page: 'contracts', contractId: j.contractId, target: 'contract-editor' }) } }, j.contractId)), h('td', null, coName(l.co)), amt(l.amt > 0 ? l.amt : null), amt(l.amt < 0 ? -l.amt : null), amt(bal)); });
@@ -286,15 +290,16 @@ function manualCard(ctx) {
         h('button', { class: 'btn btn-primary', type: 'button', on: { click: save } }, '保存'))));
 }
 
-function exportCsv(js, ctx) {
+function exportCsv(js, ctx, lineOk = () => true) {
   const { pol, names, companies, period } = ctx;
   const rows = [['期間', '仕訳ID', '区分', 'テンプレート', '摘要', '契約', '貸手', '借手', '貸借', '科目キー', '科目', '会社', '金額', '根拠']];
   for (const j of js) {
-    for (const l of j.lines) {
+    for (const l of j.lines.filter(lineOk)) {
       rows.push([period.label, j.id, j.kind === 'IND' ? '個社修正' : '連結修正', j.src ? `${j.tpl}・${j.src}` : j.tpl, j.title, j.contractId, j.lessorCo, j.lesseeCo, l.amt > 0 ? '借方' : '貸方', l.acc, accountLabel(l, pol, names), l.co === 'CONSOL' ? '連結' : l.co, Math.abs(l.amt), (l.bases || []).slice(0, 3).join(' / ')]);
     }
   }
-  download(`仕訳帳_${period.label}.csv`, toCsv(rows), 'text/csv;charset=utf-8');
+  const co = filter.company === 'all' ? '' : `_${filter.company}`;
+  download(`仕訳帳_${period.label}${co}.csv`, toCsv(rows), 'text/csv;charset=utf-8');
 }
 
 // ── 仕訳の手修正・根拠の画面への移動 ──
@@ -444,10 +449,11 @@ function filterChips(data) {
   const chip = (label, clear) => chips.push(h('span', { class: 'chip filter-chip' }, label, h('button', { class: 'chip-x', type: 'button', 'aria-label': `${label} を解除`, on: { click: () => { clear(); rerender(); } } }, '×')));
   if (filter.kind !== 'all') chip(`区分：${filter.kind === 'IND' ? '個社修正' : '連結修正'}`, () => { filter.kind = 'all'; });
   if (filter.content !== 'all') chip(`内容：${filter.content === 'OPEN' ? '開始仕訳・洗替' : filter.content.replace(':', '・')}`, () => { filter.content = 'all'; });
+  if (filter.company !== 'all') chip(`会社：${filter.company === 'CONSOL' ? '連結（会社に属さない組替）' : `${filter.company} ${data.companies.find((c) => c.code === filter.company)?.name || ''}`}`, () => { filter.company = 'all'; });
   if (filter.contract !== 'all') chip(`契約：${filter.contract} ${data.contracts.find((c) => c.id === filter.contract)?.name || ''}`, () => { filter.contract = 'all'; });
   if (filter.q) chip(`金額・科目：${filter.q}`, () => { filter.q = ''; });
   if (filter.account) chip(`元帳の科目：${filter.account}`, () => { filter.account = ''; });
   if (!chips.length) return null;
   return h('div', { class: 'filter-chips', role: 'group', 'aria-label': '絞り込み中の条件' }, h('span', { class: 'small muted' }, '絞り込み中：'), ...chips,
-    chips.length > 1 ? h('button', { class: 'btn-link', type: 'button', on: { click: () => { Object.assign(filter, { kind: 'all', content: 'all', contract: 'all', q: '', account: '' }); rerender(); } } }, 'すべて解除') : null);
+    chips.length > 1 ? h('button', { class: 'btn-link', type: 'button', on: { click: () => { Object.assign(filter, { kind: 'all', content: 'all', contract: 'all', q: '', account: '', company: 'all' }); rerender(); } } }, 'すべて解除') : null);
 }

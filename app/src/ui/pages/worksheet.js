@@ -8,7 +8,9 @@ import { focusJournals } from './journals.js';
 import { contentOrder } from '../components.js';
 
 // 列の粒度：kind＝区分別（個社修正・連結修正）、content＝内容別（開始仕訳も内容別）、content_open＝内容別（開始仕訳・洗替はまとめる）
-const view = { gran: 'kind' };
+const view = { gran: 'kind', company: 'all' };
+// 会社で抽出：その会社の行だけ（'CONSOL' は会社に属さない組替の行）
+const coOk = (l) => view.company === 'all' || l.co === view.company;
 const GRANS = [['kind', '区分別（個社修正・連結修正）'], ['content_open', '内容別（開始仕訳はまとめる）'], ['content', '内容別（開始仕訳も内容別）']];
 import { ACCOUNTS, accountLabel } from '../../engine/accounts.js';
 import { TEMPLATES, generateAll, carryModeOf, CARRY_DEFS } from '../../engine/elimination.js';
@@ -17,7 +19,8 @@ import { fmt, indexToJp } from '../../engine/util.js';
 
 export function renderWorksheet(ctx) {
   const { gen, companies, pol, names, period, unit } = ctx;
-  const ws = worksheet(gen, companies, pol, names, period);
+  const ws = worksheet(gen, companies, pol, names, period, { company: view.company === 'all' ? null : view.company });
+  const coLabel = view.company === 'all' ? '全社' : view.company === 'CONSOL' ? '連結（会社に属さない組替）' : `${view.company} ${companies.find((c) => c.code === view.company)?.name || ''}`;
   const COLN = { lessee: '借手個別', lessor: '貸手個別', ind: '個社修正', con: '連結修正' };
   // セルを押すと「計算の確認」：どの契約・仕訳から来た金額かの内訳
   const cellInfo = (r, colKey) => () => {
@@ -74,6 +77,7 @@ export function renderWorksheet(ctx) {
     { label: '判定', render: (r) => h('td', null, MUST_BE_ZERO.includes(r.acc) ? (r.consol === 0 ? statusBadge('ok', '0') : statusBadge('ng', '残高あり')) : '') },
   ];
   const granSel = h('label', null, '列の粒度 ', select(GRANS, view.gran, (v) => { view.gran = v; window.dispatchEvent(new HashChangeEvent('hashchange')); }));
+  const coSel = h('label', null, '会社 ', select([['all', 'すべての会社（全社）'], ...companies.map((c) => [c.code, `${c.code} ${c.name}`]), ['CONSOL', '連結（会社に属さない組替）']], view.company, (v) => { view.company = v; window.dispatchEvent(new HashChangeEvent('hashchange')); }));
   const bs = ws.filter((r) => r.type === 'BS');
   const pl = ws.filter((r) => r.type === 'PL');
 
@@ -85,7 +89,7 @@ export function renderWorksheet(ctx) {
   for (const j of gen.journals) {
     if (j.kind !== 'CON') continue;
     for (const l of j.lines) {
-      if (ACCOUNTS[l.acc]?.type !== 'PL') continue;
+      if (ACCOUNTS[l.acc]?.type !== 'PL' || !coOk(l)) continue;
       if (l.acc === 'TAX_ADJ') tax -= l.amt;
       else if (l.acc === 'NCI_PL') nciPl -= l.amt;
       else byTpl.set(j.src || j.tpl, (byTpl.get(j.src || j.tpl) || 0) - l.amt); // 洗替・開始仕訳は元の内容に含める
@@ -110,7 +114,7 @@ export function renderWorksheet(ctx) {
       notes: ['利息の支払額は、支払ったリース料をまず未払の利息に充て、残りを元本の返済とみなして計算します（フリーレント期間の利息は次の支払で支払われます）。'],
       sources: [{ label: '契約のリース料' }, { label: '返済スケジュール' }] };
   };
-  const exportWs = () => download(`連結精算表_${period.label}.csv`, toCsv(view.gran === 'kind'
+  const exportWs = () => download(`連結精算表_${period.label}${view.company === 'all' ? '' : `_${view.company}`}.csv`, toCsv(view.gran === 'kind'
     ? [['科目', '借手個別（アプリ計算値）', '貸手個別（アプリ計算値）', '単純合算', '個社修正', '連結修正', '連結'], ...ws.map((r) => [r.label, r.lessee, r.lessor, r.simple, r.ind, r.con, r.consol])]
     : [['科目', '借手個別（アプリ計算値）', '貸手個別（アプリ計算値）', '単純合算', ...contentCols.map((cc) => (cc.key === 'OPEN' ? cc.title : `${cc.key} ${cc.title}`)), '連結'], ...ws.map((r) => [r.label, r.lessee, r.lessor, r.simple, ...contentCols.map((cc) => r.byContent[cc.key] ?? 0), r.consol])]), 'text/csv;charset=utf-8');
   const notesCard = renderNotes(ctx);
@@ -118,9 +122,9 @@ export function renderWorksheet(ctx) {
   const rollCard = renderRollforward(ctx);
 
   return h('div', { class: 'page' },
-    card('連結精算表（グループ内リース関連科目、借方＋／貸方△）',
-      h('div', { class: 'alert alert-info' }, '個別の金額はアプリの計算値です（個別帳簿との一致は「検算 CHK-10」で確認）。「グループ内：連結後0」の科目が0になっていれば消去は完全です。'),
-      h('div', { class: 'actions' }, granSel, h('button', { class: 'btn', type: 'button', on: { click: exportWs } }, '表を書き出す（CSV）'), h('span', { class: 'muted small' }, '金額を押すと内訳を表示し、元帳・仕訳帳へ移動できます。')),
+    card(`連結精算表（グループ内リース関連科目、借方＋／貸方△）：${coLabel}`,
+      h('div', { class: 'alert alert-info' }, '個別の金額はアプリの計算値です（個別帳簿との一致は「検算 CHK-10」で確認）。「グループ内：連結後0」の科目が0になっていれば消去は完全です。会社を選ぶと、その会社の個別・個社修正・連結修正の行だけで集計します（会社ごとの連結パッケージの確認用。消去は会社ごとにも0になります）。'),
+      h('div', { class: 'actions' }, coSel, granSel, h('button', { class: 'btn', type: 'button', on: { click: exportWs } }, '表を書き出す（CSV）'), h('span', { class: 'muted small' }, '金額を押すと内訳を表示し、元帳・仕訳帳へ移動できます。')),
       h('h3', null, '貸借対照表'), table(cols, bs, { className: 'ws-table' }),
       h('h3', null, '損益計算書'), table(cols, pl, { className: 'ws-table' })),
     card(null, waterfall({ wide: true, title: '損益のブリッジ：単純合算 → 連結（税引前）→ 税引後 → 親会社株主帰属（グループ内リース関連）', subtitle: '各棒にカーソルを合わせると内容を表示。連結（税引前）に残るのは主に貸手資産の減価償却費（組替後）', steps, unit })),
@@ -146,7 +150,7 @@ function monthlySplitter(ctx) {
   const cache = splitCache.get(gen) || splitCache.set(gen, new Map()).get(gen); // 同じ計算結果の間は月ごとの仕訳を使い回す
   const genOf = (m) => cache.get(m) || cache.set(m, generateAll(data, { start: m, end: m, label: indexToJp(m), fyEnd: period.fyEnd }, pol, { schedCache })).get(m);
   const pick = (key) => (j) => (key === 'IND' ? j.kind === 'IND' : key === 'CON' ? j.kind === 'CON' : key === 'OPEN' ? OPEN_TPLS.has(j.tpl) || j.tpl === 'C-01R' : contentOf(j) === key);
-  const sumOf = (js, label) => js.flatMap((j) => j.lines).filter((l) => accountLabel(l, pol, names) === label).reduce((a, l) => a + l.amt, 0);
+  const sumOf = (js, label) => js.flatMap((j) => j.lines).filter((l) => coOk(l) && accountLabel(l, pol, names) === label).reduce((a, l) => a + l.amt, 0);
   // 月末の残高：その月だけを期間とした仕訳（開始仕訳を含む）の合計＝その月末の連結修正の残高
   const balAt = (m, f, label) => sumOf(genOf(m).journals.filter(f), label);
   const open = (r, key) => () => {
@@ -192,7 +196,7 @@ function renderRollforward(ctx) {
   const { data, pol, names, period, schedCache, gen, companies } = ctx;
   const cfg = data.config.carry || {};
   if (pol['POL-03'] === 'balance') {
-    return h('section', { class: 'card', id: 'rollforward' }, h('h2', null, `残高の増減表と期間の連続性（${period.label}）`),
+    return h('section', { class: 'card', id: 'rollforward' }, h('h2', null, `残高の増減表と期間の連続性（${period.label}${view.company === 'all' ? '' : `・${view.company === 'CONSOL' ? '連結' : view.company}`}）`),
       h('div', { class: 'alert alert-info' }, '会計方針 POL-03 が「期末残高一括消去」のため、開始仕訳を作らず、毎期末に残高を一括で消去します。前期末の残高と当期首の開始仕訳の比較は行いません（期間の連続性は検算 CHK-06 で確認しています）。'));
   }
   let prev = prevCache.get(gen);
@@ -206,6 +210,7 @@ function renderRollforward(ctx) {
   const keyOf = (l) => (ACCOUNTS[l.acc]?.type === 'PL' || l.acc === 'RE_OPEN' ? RE : accountLabel(l, pol, names));
   const rows = new Map();
   const add = (col, j, l) => {
+    if (!coOk(l)) return;
     if (ACCOUNTS[l.acc]?.type !== 'BS' && ACCOUNTS[l.acc]?.type !== 'PL') return;
     const k = keyOf(l);
     const r = rows.get(k) || rows.set(k, { label: k, acc: k === RE ? 'RE_OPEN' : l.acc, prev: 0, open: 0, adj: 0, move: 0, items: { prev: [], open: [], adj: [], move: [] } }).get(k);
@@ -226,7 +231,9 @@ function renderRollforward(ctx) {
   const order = Object.keys(ACCOUNTS);
   const list = [...rows.values()].filter((r) => r.prev || r.open || r.adj || r.move).sort((a, b) => (a.label === RE ? 1 : b.label === RE ? -1 : order.indexOf(a.acc) - order.indexOf(b.acc)));
   for (const r of list) r.end = r.open + r.adj + r.move;
-  const ng = list.filter((r) => r.prev !== r.open);
+  // 会社別の表示では利益剰余金の行は比べない：開始仕訳の利益剰余金は会社ごとの純資産修正額で配分し、損益は行の会社に属するため（全社では一致する）
+  const skip = (r) => view.company !== 'all' && r.label === RE;
+  const ng = list.filter((r) => !skip(r) && r.prev !== r.open);
   const NAMES = { prev: '前期末（繰越ありの内容）', open: '期首（開始仕訳）', adj: '手修正の引継', move: '当期の増減（開始仕訳以外）' };
   const info = (r, col) => () => {
     const items = col === 'end' ? [...r.items.open, ...r.items.adj, ...r.items.move] : r.items[col];
@@ -240,14 +247,14 @@ function renderRollforward(ctx) {
     { label: '科目', key: 'label' },
     { label: '前期末（繰越ありの内容）', num: true, key: 'prev', calc: (r) => info(r, 'prev')() },
     { label: '期首（開始仕訳）', num: true, key: 'open', calc: (r) => info(r, 'open')() },
-    { label: '前期末＝期首', render: (r) => h('td', null, r.prev === r.open ? statusBadge('ok', '一致') : statusBadge('ng', `差 ${fmt(r.prev - r.open)}`)) },
+    { label: '前期末＝期首', render: (r) => h('td', null, skip(r) ? h('span', { class: 'muted small', title: '利益剰余金は会社別には比べません（全社で一致を確認）' }, '全社で比較') : r.prev === r.open ? statusBadge('ok', '一致') : statusBadge('ng', `差 ${fmt(r.prev - r.open)}`)) },
     { label: '手修正の引継', num: true, key: 'adj', calc: (r) => info(r, 'adj')() },
     { label: '当期の増減（開始仕訳以外）', num: true, key: 'move', calc: (r) => info(r, 'move')() },
     { label: '期末（連結修正の合計）', render: (r) => amt(r.end, { strong: true, calc: info(r, 'end') }) },
   ], list, { className: 'ws-table' });
-  return h('section', { class: 'card', id: 'rollforward' }, h('h2', null, `残高の増減表と期間の連続性（${period.label}）`),
+  return h('section', { class: 'card', id: 'rollforward' }, h('h2', null, `残高の増減表と期間の連続性（${period.label}${view.company === 'all' ? '' : `・${view.company === 'CONSOL' ? '連結' : view.company}`}）`),
     h('div', { class: ng.length ? 'alert alert-err' : 'alert alert-ok' }, ng.length ? `${ng.length}科目で、前期末の残高と当期首の開始仕訳が一致しません。繰越設定・手修正・契約の変更（確定済み期間の数値の変更）を確認してください。` : '貸借対照表のすべての科目で、前期末の残高（前期末までの仕訳から別に計算）と当期首の開始仕訳が一致しています。'),
-    h('div', { class: 'alert alert-info' }, '期末＝期首（開始仕訳）＋手修正の引継＋当期の増減。「繰越なし」の内容（流動・固定の組替など）と個社修正は、毎期末に計上し直すため「当期の増減」に含みます。利益剰余金（期首）の行は、前期末の損益の累計（繰越ありの内容）と開始仕訳の利益剰余金期首を比べます。手入力仕訳は前期末・期首の比較の対象外ですが、当期の増減・期末には含みます（仕訳帳で確認）。金額を押すと契約・仕訳ごとの内訳を表示します。'),
+    h('div', { class: 'alert alert-info' }, '期末＝期首（開始仕訳）＋手修正の引継＋当期の増減。「繰越なし」の内容（流動・固定の組替など）と個社修正は、毎期末に計上し直すため「当期の増減」に含みます。利益剰余金（期首）の行は、前期末の損益の累計（繰越ありの内容）と開始仕訳の利益剰余金期首を比べます。手入力仕訳は前期末・期首の比較の対象外ですが、当期の増減・期末には含みます（仕訳帳で確認）。会社で抽出しているときは、利益剰余金（期首）の行は比べません（開始仕訳の利益剰余金は会社ごとの純資産修正額で配分し、損益は各行の会社に属するため。全社の表示で一致を確認できます）。金額を押すと契約・仕訳ごとの内訳を表示します。'),
     list.length ? tbl : h('p', { class: 'muted' }, '対象の残高はありません。'));
 }
 
@@ -260,12 +267,13 @@ function renderProofs(ctx) {
   const taxRows = [], nciRows = [];
   for (const r of gen.results) {
     const c = r.contract;
-    for (const co of [...new Set([c.lesseeCo, c.lessorCo])]) {
+    for (const co of [...new Set([c.lesseeCo, c.lessorCo])].filter((x) => view.company === 'all' || x === view.company)) {
       const dt = (r.DT.close[co] || 0) - (r.DT.open[co] || 0);
       if (!r.E.open[co] && !r.E.close[co] && !dt) continue;
       taxRows.push({ contract: c.id, co: coName(co), eo: r.E.open[co] || 0, to: pct(r.rates.tO[co] || 0), dto: r.DT.open[co] || 0, ec: r.E.close[co] || 0, tc: pct(r.rates.tC[co] || 0), dtc: r.DT.close[co] || 0, chg: dt, jr: sumAcc(c.id, co, 'TAX_ADJ') + gen.journals.filter((j) => j.contractId === c.id && (j.src || j.tpl) === 'C-13' && j.tpl !== 'C-01T').flatMap((j) => j.lines).filter((l) => l.co === co && l.acc === 'RE_OPEN').reduce((a, l) => a + l.amt, 0) });
     }
     const L = c.lesseeCo;
+    if (view.company !== 'all' && view.company !== L) continue;
     if (r.NCI.open[L] || r.NCI.close[L] || r.cap.close) nciRows.push({ contract: c.id, co: coName(L), no: r.NCI.open[L] || 0, ro: pct(r.rates.nO[L] || 0), nc: r.NCI.close[L] || 0, rc: pct(r.rates.nC[L] || 0), cap: (r.cap.close || 0) - (r.cap.open || 0), chg: (r.NCI.close[L] || 0) - (r.NCI.open[L] || 0), jr: -gen.journals.filter((j) => j.contractId === c.id).flatMap((j) => j.lines).filter((l) => l.co === L && l.acc === 'NCI' && true).reduce((a, l) => a + l.amt, 0) - (r.NCI.open[L] || 0) });
   }
   const tot = (rows, f) => rows.reduce((a, x) => a + (x[f] || 0), 0);
@@ -332,7 +340,7 @@ function renderNotes(ctx) {
       const rs = rows.filter((r) => r.item === it);
       const badgeCls = { calc: 'badge ok', input: 'badge caution', na: 'badge', text: 'badge' }[it.kind];
       const descTd = () => h('td', { class: 'small' }, h('span', { class: badgeCls }, KIND[it.kind]), ' ', it.desc);
-      if (!(it.byClass || it.byBucket)) {
+      if (!(it.byClass || it.byBucket || it.byList)) {
         const r = rs[0];
         tbody.push(h('tr', null, h('td', null, h('b', null, it.title)), h('td', null, it.when), numTd(r.total, info(r, 'total')), amt(r.group, { calc: info(r, 'group') }), amt(r.adj, { calc: info(r, 'group') }), numTd(r.consolidated, info(r, 'cons'), true), descTd()));
         continue;

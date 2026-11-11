@@ -35,7 +35,7 @@ export function individualLines(result, companies, pol) {
   }
   add('LEASE_ACCRUED', c.lesseeCo, -cl.X, '借手個別：未払リース料');
   add('DEP_ROU', c.lesseeCo, ps.dep, '借手個別：減価償却費');
-  add('INT', c.lesseeCo, ps.int, '借手個別：支払利息');
+  add('INT', c.lesseeCo, ps.int, '借手個別：リース負債に係る利息費用');
   const inP = sched.months.filter((x) => x.m >= pS && x.m <= pE);
   const preT = inP.filter((x) => !x.lessee.active).reduce((a, x) => a + x.lessor.cash, 0);
   add('PRE_RENT', c.lesseeCo, preT, '借手個別：適用開始前の支払リース料');
@@ -63,8 +63,10 @@ export function individualLines(result, companies, pol) {
 }
 
 /** 連結精算表（グループ内リース関連科目） */
-export function worksheet(gen, companies, pol, names, period) {
+export function worksheet(gen, companies, pol, names, period, opts = {}) {
   const rows = new Map();
+  // opts.company：その会社の行だけで集計する（'CONSOL' は会社に属さない組替の行）
+  const ok = (l) => !opts.company || l.co === opts.company;
   const key = (l) => accountLabel(l, pol, names);
   const get = (l) => {
     const k = key(l);
@@ -74,6 +76,7 @@ export function worksheet(gen, companies, pol, names, period) {
   };
   for (const r of gen.results) {
     for (const l of individualLines(r, companies, pol)) {
+      if (!ok(l)) continue;
       const row = get(l);
       const col = ACCOUNTS[l.acc]?.side === 'R' ? 'lessor' : 'lessee';
       row[col] += l.amt;
@@ -82,6 +85,7 @@ export function worksheet(gen, companies, pol, names, period) {
   }
   for (const j of gen.journals) {
     for (const l of j.lines) {
+      if (!ok(l)) continue;
       const row = get(l);
       const col = j.kind === 'IND' ? 'ind' : 'con';
       row[col] += l.amt;
@@ -239,7 +243,7 @@ export function contractMonthly(sched, pol) {
   let prevE = eAt(sched.meta.firstIdx - 1);
   for (const x of sched.months) {
     const le = x.lessee, lo = x.lessor;
-    // 定義は年度別サマリー（contractYearly）と同じ：利息＝支払利息＋未払利息、支払＝借手の支払（適用開始後）
+    // 定義は年度別サマリー（contractYearly）と同じ：利息＝リース負債に係る利息費用＋未払利息、支払＝借手の支払（適用開始後）
     const int = (le.int || 0) + (le.accr || 0);
     const pay = le.pay || 0;
     const prePay = !le.active ? lo.cash || 0 : 0; // 適用開始前（経過措置の測定開始前）の支払リース料

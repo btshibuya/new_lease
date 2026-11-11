@@ -305,7 +305,7 @@ export function runChecks(data, period, pol, gen, names = {}, opts = {}) {
       const ws0 = worksheet(gen0, data.companies, pol, names, period);
       if (!ws0.some((r) => zero.has(r.acc) && r.consol !== 0)) return item('CHK-04', '消去の完全性（連結後のグループ内残高・取引が0）', WARN, `${nz.length}科目で残高が残っています（仕訳の手修正によるもの。修正前の計算値では0）`, nz.map((x) => ({ ...x, warn: true })), 'アプリ計算の個別残高に対する検査');
     }
-    return item('CHK-04', '消去の完全性（連結後のグループ内残高・取引が0）', nz.length ? NG : OK, nz.length ? `${nz.length}科目で残高が残っています` : '使用権資産・リース負債・受取リース料・支払利息等はすべて0（個別欄はアプリの計算値。帳簿との一致は CHK-10）', nz, 'アプリ計算の個別残高に対する検査');
+    return item('CHK-04', '消去の完全性（連結後のグループ内残高・取引が0）', nz.length ? NG : OK, nz.length ? `${nz.length}科目で残高が残っています` : '使用権資産・リース負債・受取リース料・リース負債に係る利息費用等はすべて0（個別欄はアプリの計算値。帳簿との一致は CHK-10）', nz, 'アプリ計算の個別残高に対する検査');
   });
 
   safe('CHK-05', '消去額の独立組立（期末残高・当期損益から期待値を作り仕訳と比較）', () => {
