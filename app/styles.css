@@ -32,23 +32,23 @@
    --navy：見出しの文字・濃い色、--navy-2：主ボタン、--corporate：基調色、--cyan：選択中・強調、--cyan-soft：選択中の背景 */
 html[data-palette="blue"] {
   --navy: #1b3a6b; --navy-2: #2b579a; --navy-hover: #1e4380; --corporate: #2b579a; --cyan: #41a5ee; --cyan-soft: #e9f2fc; --cyan-line: #b9d7f5;
-  --s1: #2b579a; --s2: #41a5ee; --s3: #00754e; --s4: #1b3a6b; --s5: #7f9fd0; --s6: #9ccbf3; --s7: #4fa585; --s8: #8a96ad;
+  --s1: #2b579a; --s2: #41a5ee; --s3: #1b3a6b; --s4: #6f93cf; --s5: #7f9fd0; --s6: #9ccbf3; --s7: #2f86c9; --s8: #8a96ad;
 }
 html[data-palette="lightblue"] {
   --navy: #004578; --navy-2: #0078d4; --navy-hover: #005a9e; --corporate: #0078d4; --cyan: #28a8ea; --cyan-soft: #e8f4fd; --cyan-line: #a9d8f6;
-  --s1: #0078d4; --s2: #28a8ea; --s3: #00754e; --s4: #004578; --s5: #6cb2ea; --s6: #a6dcf7; --s7: #4fa585; --s8: #8a96ad;
+  --s1: #0078d4; --s2: #28a8ea; --s3: #004578; --s4: #5aa9e6; --s5: #6cb2ea; --s6: #a6dcf7; --s7: #1f8fd6; --s8: #8a96ad;
 }
 html[data-palette="green"] {
   --navy: #0e4429; --navy-2: #217346; --navy-hover: #185c37; --corporate: #217346; --cyan: #33c481; --cyan-soft: #e9f6ee; --cyan-line: #a8dcbf;
-  --s1: #217346; --s2: #33c481; --s3: #2b579a; --s4: #0e4429; --s5: #7fb894; --s6: #9fe0c0; --s7: #5b86d6; --s8: #8a96ad;
+  --s1: #217346; --s2: #33c481; --s3: #0e4429; --s4: #6fb08a; --s5: #7fb894; --s6: #9fe0c0; --s7: #2e8b57; --s8: #8a96ad;
 }
 html[data-palette="red"] {
   --navy: #7a2a12; --navy-2: #b7472a; --navy-hover: #963a21; --corporate: #c43e1c; --cyan: #ed6c47; --cyan-soft: #fdf0eb; --cyan-line: #f4c2b2;
-  --s1: #c43e1c; --s2: #ed6c47; --s3: #00754e; --s4: #7a2a12; --s5: #e09a85; --s6: #f6b9a5; --s7: #4fa585; --s8: #8a96ad;
+  --s1: #c43e1c; --s2: #ed6c47; --s3: #7a2a12; --s4: #e08a6a; --s5: #e09a85; --s6: #f6b9a5; --s7: #a8462a; --s8: #8a96ad;
 }
 html[data-palette="teal"] {
   --navy: #04443d; --navy-2: #077568; --navy-hover: #055a50; --corporate: #077568; --cyan: #2bb3a3; --cyan-soft: #e7f5f3; --cyan-line: #a4dcd5;
-  --s1: #077568; --s2: #2bb3a3; --s3: #2b579a; --s4: #04443d; --s5: #73b7ae; --s6: #9fded6; --s7: #5b86d6; --s8: #8a96ad;
+  --s1: #077568; --s2: #2bb3a3; --s3: #04443d; --s4: #5fb0a5; --s5: #73b7ae; --s6: #9fded6; --s7: #0e8a7b; --s8: #8a96ad;
 }
 
 /* ── 配色の切替え：ダーク ── */
@@ -220,6 +220,9 @@ legend { font-weight: 700; color: var(--navy); padding: 0 6px; }
 }
 .tbl.journal-m { table-layout: fixed; width: 100%; font-size: 12.5px; }
 .tbl.journal-m th:nth-child(2), .tbl.journal-m th:nth-child(3) { width: 84px; }
+.report-tbl { max-height: 480px; }
+.report-tbl thead th { position: sticky; top: 0; z-index: 1; }
+.btn-link.contract-link { font-weight: 700; }
 .tbl.journal-m th, .tbl.journal-m td { padding: 5px 6px; }
 .journal-card .drill summary, .drill-pair summary { cursor: pointer; color: var(--navy-2); }
 .drill-pair { margin: 6px 0 6px 12px; }

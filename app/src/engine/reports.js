@@ -226,3 +226,44 @@ export function contractYearly(sched, periods, currentPortionFn) {
   return rows;
 }
 
+
+/**
+ * 契約の月次レポート：返済（元本・利息）、償却、借手の貸借対照表・損益、貸手の収益、連結への影響。
+ * 連結損益への影響＝消去差額（純資産修正額）の当月の増減（年度別サマリーの「当期の連結損益への影響」と同じ定義）。
+ * @returns 月ごとの行（m, ym, pay, int, principal, L, cost, dep, acc, rou, X, assets, liabs, equity, lesseeExp, inc, R, cumE, plEffect）
+ */
+export function contractMonthly(sched, pol) {
+  const eAt = (idx) => Object.values(eFromSchedule(sched, idx, pol)).reduce((a, v) => a + v, 0);
+  const out = [];
+  let prevE = eAt(sched.meta.firstIdx - 1);
+  for (const x of sched.months) {
+    const le = x.lessee, lo = x.lessor;
+    const int = (le.int || 0) + (le.accr || 0);
+    const pay = le.active ? le.pay || 0 : lo.cash || 0;
+    const rou = (le.cost_end || 0) - (le.acc_end || 0);
+    const liabs = (le.L_end || 0) + (le.X_end || 0);
+    const lesseeExp = (le.dep || 0) + (le.int || 0) + (le.cost || 0) + (!le.active ? lo.cash || 0 : 0) - (sched.meta.model === 'asc842ol' ? le.accr || 0 : 0) + (le.idcDep || 0);
+    const cumE = eAt(x.m);
+    out.push({
+      m: x.m, pay, int, principal: le.active && sched.meta.model !== 'offbalance' ? pay - int : 0, L: le.L_end || 0,
+      cost: le.cost_end || 0, dep: le.dep || 0, acc: le.acc_end || 0, rou, X: le.X_end || 0,
+      assets: rou, liabs, equity: rou - liabs, lesseeExp, inc: lo.inc || 0, R: lo.R_end || 0,
+      cumE, plEffect: cumE - prevE,
+    });
+    prevE = cumE;
+  }
+  return out;
+}
+
+/** 月次の行を期間（年度など）ごとにまとめる。残高は期末、フローは合計 */
+export function rollupMonthly(rows, periods) {
+  const FLOW = ['pay', 'int', 'principal', 'dep', 'lesseeExp', 'inc', 'plEffect'];
+  return periods.map((p) => {
+    const inP = rows.filter((r) => r.m >= p.start && r.m <= p.end);
+    if (!inP.length) return null;
+    const last = inP[inP.length - 1];
+    const o = { ...last, label: p.label, start: p.start, end: p.end };
+    for (const f of FLOW) o[f] = inP.reduce((a, r) => a + r[f], 0);
+    return o;
+  }).filter(Boolean);
+}

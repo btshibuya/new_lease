@@ -98,3 +98,27 @@ test('四半期（累計）：第4四半期累計の仕訳は年度と同じ。�
     for (const p of ytd.slice(y * 4, y * 4 + 4)) assert.deepEqual(runChecks(base, p, pol, generateAll(base, p, pol)).filter((c) => c.status === 'ng').map((c) => c.id), [], p.label);
   }
 });
+
+import { contractMonthly, rollupMonthly, contractYearly } from '../app/src/engine/reports.js';
+import { currentPortion } from '../app/src/engine/schedule.js';
+
+test('契約の月次レポート：元本＋利息＝支払、年度に集計すると年度別サマリーと一致、終了時に消去差額は0', () => {
+  const YRS = buildPeriods(ymToIndex('2024-04'), ymToIndex('2040-03'), 3, 'year');
+  for (const c of base.contracts) {
+    const s = buildSchedule(c, pol, { lesseeCompany: base.companies.find((x) => x.code === c.lesseeCo) });
+    const mo = contractMonthly(s, pol);
+    for (const r of mo) if (r.principal) assert.equal(r.principal + r.int, r.pay, `${c.id} ${r.m}`);
+    const yr = rollupMonthly(mo, YRS);
+    const ref = contractYearly(s, YRS, currentPortion);
+    for (const y of yr) {
+      const rf = ref.find((x) => x.label === y.label);
+      if (!rf) continue;
+      assert.equal(y.L, rf.closeL, `${c.id} ${y.label} 期末負債`);
+      assert.equal(y.rou, rf.rouNet, `${c.id} ${y.label} 使用権資産簿価`);
+      assert.equal(y.dep, rf.dep, `${c.id} ${y.label} 償却費`);
+      assert.equal(y.inc, rf.inc, `${c.id} ${y.label} 貸手収益`);
+    }
+    assert.equal(mo.reduce((a, r) => a + r.plEffect, 0), mo[mo.length - 1].cumE - (mo[0].cumE - mo[0].plEffect));
+    if (!c.terminationYm) assert.equal(mo[mo.length - 1].cumE, 0, `${c.id} 終了時の消去差額`);
+  }
+});

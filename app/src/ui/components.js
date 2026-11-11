@@ -42,7 +42,7 @@ export function journalCard(j, ctx, opts = {}) {
         breakdown: { title: `会社・契約ごとの内訳（${rows.length}件）`, cols: [{ label: '会社（貸手→借手）', key: 'pair' }, { label: '契約', key: 'contract' }, { label: '金額', key: 'amt', num: true }], rows: [...rows.map((x) => ({ ...x, amt: Math.abs(x.amt) })), { pair: '合計', contract: '', amt: Math.abs(l.amt), total: true }] },
         notes: bases.slice(0, 8).concat(bases.length > 8 ? [`ほか ${bases.length - 8} 件の根拠`] : []),
         sources: [{ label: `仕訳 ${j.tpl}${j.src ? `（${j.src}）` : ''}`, kind: 'journal' }, ...(String(j.tpl).startsWith('C-01') && j.tpl !== 'C-01R' ? [{ label: '前期末からの繰越', kind: 'carry' }] : [])],
-        links: opts.links ? opts.links(l) : [],
+        links: opts.links ? opts.links(l, j) : [],
       };
     }
     const months = (j.details || []).flatMap((d) => d.lines.filter((x) => x.acc === l.acc && x.co === l.co && (x.meta?.contractId || '') === (l.meta?.contractId || '')).map((x) => ({ d, x })));
@@ -58,7 +58,7 @@ export function journalCard(j, ctx, opts = {}) {
         ...(j.manual ? [{ label: '手入力', kind: 'manual' }] : []),
         ...(j.tpl === 'C-01' || j.tpl === 'C-01T' || j.tpl === 'C-01N' || j.tpl === 'M-01O' ? [{ label: '前期末からの繰越', kind: 'carry' }] : []),
       ],
-      links: opts.links ? opts.links(l) : [],
+      links: opts.links ? opts.links(l, j) : [],
     };
   };
   for (let i = 0; i < n; i++) {

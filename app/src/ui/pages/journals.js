@@ -39,12 +39,13 @@ export function renderJournals(ctx) {
     h('label', null, '契約 ', select([['all', 'すべて'], ...data.contracts.map((c) => [c.id, `${c.id} ${c.name}`])], filter.contract, (v) => { filter.contract = v; rerender(); })),
     h('button', { class: 'btn', type: 'button', on: { click: () => exportCsv(js, ctx) } }, '仕訳帳を書き出す（CSV）'));
 
-  const links = (l) => [{ label: `元帳（${accountLabel(l, pol, names)}）`, go: () => focusJournals({ account: accountLabel(l, pol, names) }) }];
+  const links = (l, j) => [{ label: `元帳（${accountLabel(l, pol, names)}）`, go: () => focusJournals({ account: accountLabel(l, pol, names) }) }, ...(j ? contractTargets(j, data).slice(0, 6).map((t) => ({ label: `契約の登録（${t.contractId}）`, go: () => goTo(t) })) : [])];
   const grouped = groupJournals(js, filter.mode, ctx);
   const opening = grouped.filter((j) => String(j.tpl).startsWith('C-01') || j.tpl === 'M-01O');
   const current = grouped.filter((j) => !opening.includes(j));
   // 各仕訳：根拠の画面へ（候補が複数なら選ぶ）、金額の手修正（契約単位の自動作成の仕訳のみ）
   const actions = (j) => [
+    contractButton(j, data),
     h('button', { class: 'btn btn-sm', type: 'button', on: { click: () => chooseAndGo(`根拠の画面へ：${j.src ? `${j.tpl}・${j.src}` : j.tpl} ${j.title}`, relatedCandidates(j, ctx)) } }, '根拠の画面へ'),
     !j.parts && !j.manual && !j.carriedOverride ? h('button', { class: 'btn btn-sm', type: 'button', on: { click: () => editOverride(j, ctx) } }, j.override ? '手修正を編集' : '金額を修正') : null,
   ];
@@ -191,7 +192,7 @@ function ledgerCard(js, ctx) {
   const items = [...js].sort(contentOrder).flatMap((j) => j.lines.filter((l) => accountLabel(l, pol, names) === filter.account).map((l) => ({ j, l })));
   const td = items.filter((x) => x.l.amt > 0).reduce((a, x) => a + x.l.amt, 0), tc = -items.filter((x) => x.l.amt < 0).reduce((a, x) => a + x.l.amt, 0);
   let bal = 0;
-  const rows = items.map(({ j, l }) => { bal += l.amt; return h('tr', null, h('td', { class: 'nw' }, j.src ? `${j.tpl}・${j.src}` : j.tpl), h('td', null, contentName(j)), h('td', { class: 'nw' }, j.manual ? '手入力' : j.contractId), h('td', null, coName(l.co)), amt(l.amt > 0 ? l.amt : null), amt(l.amt < 0 ? -l.amt : null), amt(bal)); });
+  const rows = items.map(({ j, l }) => { bal += l.amt; return h('tr', null, h('td', { class: 'nw' }, j.src ? `${j.tpl}・${j.src}` : j.tpl), h('td', null, contentName(j)), h('td', { class: 'nw' }, j.manual || !j.contractId || j.contractId === '—' ? '手入力' : h('button', { class: 'btn-link contract-link', type: 'button', title: '契約の登録画面を開く', on: { click: () => goTo({ page: 'contracts', contractId: j.contractId, target: 'contract-editor' }) } }, j.contractId)), h('td', null, coName(l.co)), amt(l.amt > 0 ? l.amt : null), amt(l.amt < 0 ? -l.amt : null), amt(bal)); });
   return h('section', { class: 'card', id: 'ledger' }, h('h2', null, `元帳：${filter.account}`), tSel,
     h('div', { class: 't-account' },
       h('div', { class: 't-body' }, h('div', null, h('div', { class: 't-head' }, '借方'), h('div', { class: 't-total' }, `計 ${fmt(td)}`)), h('div', null, h('div', { class: 't-head' }, '貸方'), h('div', { class: 't-total' }, `計 ${fmt(tc)}`))),
@@ -393,4 +394,15 @@ export function editOverride(j, ctx) {
   overlay = h('div', { class: 'modal-bg', on: { keydown: (e) => { if (e.key === 'Escape') close(); } } }, box);
   document.body.appendChild(overlay);
   box.querySelector('input')?.focus();
+}
+
+/** 仕訳に紐づく契約（物件）の登録画面への移動先 */
+function contractTargets(j, data) {
+  const ids = [...new Set((j.parts || [j]).filter((p) => !p.manual && p.contractId && p.contractId !== '—').map((p) => p.contractId))];
+  return ids.map((id) => ({ page: 'contracts', contractId: id, target: 'contract-editor', title: `契約の登録：${id} ${data.contracts.find((c) => c.id === id)?.name || ''}`, desc: '契約（物件）の登録・編集画面' }));
+}
+function contractButton(j, data) {
+  const t = contractTargets(j, data);
+  if (!t.length) return null;
+  return h('button', { class: 'btn btn-sm', type: 'button', title: '仕訳に紐づく契約（物件）の登録画面を開く', on: { click: () => chooseAndGo('契約（物件）の登録画面へ', t) } }, t.length === 1 ? `契約 ${t[0].contractId} を開く` : `契約を開く（${t.length}件）`);
 }
