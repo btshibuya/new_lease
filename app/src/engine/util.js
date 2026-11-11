@@ -72,11 +72,17 @@ export function buildPeriods(fromIndex, toIndex, fyeMonth, granularity = 'year')
         const qe = qs + 2;
         periods.push({ start: qs, end: qe, label: `${fiscalLabel(e)} 第${q + 1}四半期（〜${indexToJp(qe)}）`, fyEnd: e });
       }
+    } else if (granularity === 'month') {
+      // 月次（発生）：各月
+      for (let m = s; m <= e; m++) periods.push({ start: m, end: m, label: `${indexToJp(m)}（${fiscalLabel(e)}）`, fyEnd: e });
+    } else if (granularity === 'month_ytd') {
+      // 月次（累計）：期首から各月末まで（期末月の累計＝年度）
+      for (let m = s; m <= e; m++) periods.push({ start: s, end: m, label: `${fiscalLabel(e)} ${indexToJp(m)}までの累計`, fyEnd: e, ytd: true });
     } else if (granularity === 'quarter_ytd') {
       // 四半期（累計）：期首から各四半期末まで（第4四半期累計＝年度）
       for (let q = 0; q < 4; q++) {
         const qe = s + q * 3 + 2;
-        periods.push({ start: s, end: qe, label: `${fiscalLabel(e)} 第${q + 1}四半期累計（${indexToJp(s)}〜${indexToJp(qe)}）`, fyEnd: e, ytd: true });
+        periods.push({ start: s, end: qe, label: `${fiscalLabel(e)} 第${q + 1}四半期累計`, fyEnd: e, ytd: true });
       }
     } else {
       periods.push({ start: s, end: e, label: fiscalLabel(e), fyEnd: e });

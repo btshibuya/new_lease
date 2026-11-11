@@ -1,7 +1,7 @@
 // 個社修正仕訳・連結修正仕訳の生成（共通部品）
 // 方針：連結修正は「個別で計上された仕訳を取り消す（逆仕訳）」ことで作成し、
 // 各明細に根拠（どの月の・どの個別仕訳の取消か、計算式）を持たせる。
-import { buildSchedule, currentPortion, periodSummary } from './schedule.js';
+import { buildSchedule, currentPortion, periodSummary, lessorDepBetween } from './schedule.js';
 import { ACCOUNTS, accountLabel, metaOf, rateAt } from './accounts.js';
 import { eFromSchedule } from './reports.js';
 import { round, indexToJp, indexToYm, ymToIndex, fmt } from './util.js';
@@ -426,7 +426,7 @@ export function contractJournals(c, period, ctx) {
   const c12 = [];
   if (pol['POL-05'] === 'by_lessee_dept' && r.assetCost > 0) {
     const act = sched.months.filter((x) => x.m >= period.start && x.m <= period.end && x.m >= sched.meta.start);
-    const dep = R(act.reduce((a, x) => a + (x.lessor.assetDep || 0), 0) * ratio);
+    const dep = lessorDepBetween(sched, period.start, period.end, ratio, R); // 累計を丸めた差（区切りによらず合計が一致）
     if (dep) {
       c12.push(ln('DEP_RECLASS', 'CONSOL', dep, meta, `リース期間中（${act.length}か月）の貸手減価償却費 × 按分比率 ${pct(ratio)}`));
       c12.push(ln('RENTAL_DEP', c.lessorCo, -dep, meta, '貸手の減価償却費（賃貸原価等）'));

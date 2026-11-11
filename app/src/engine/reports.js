@@ -1,7 +1,7 @@
 // 連結精算表・連結CF消去データ・満期分析（共通部品）
 import { accountLabel, ACCOUNTS, metaOf } from './accounts.js';
 import { round } from './util.js';
-import { phaseAtIndex } from './schedule.js';
+import { phaseAtIndex, lessorDepBetween } from './schedule.js';
 
 /**
  * 個別財務諸表上のグループ内リース関連残高（アプリの計算値）。借方＋。
@@ -57,7 +57,7 @@ export function individualLines(result, companies, pol) {
       add('RENTAL_ACC', c.lessorCo, -R(endRec.lessor.assetAcc_end * ratio), '貸手個別：減価償却累計額（按分後）');
     }
     const act = inP.filter((x) => x.m >= sched.meta.start);
-    add('RENTAL_DEP', c.lessorCo, R(act.reduce((a, x) => a + (x.lessor.assetDep || 0), 0) * ratio), '貸手個別：減価償却費（リース期間分・按分後）');
+    add('RENTAL_DEP', c.lessorCo, lessorDepBetween(sched, pS, pE, ratio, R), `貸手個別：減価償却費（リース期間分・按分後、${act.length}か月）`);
   }
   return out;
 }

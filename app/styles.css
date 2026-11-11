@@ -371,3 +371,8 @@ td.hl, .hl:not(rect) { fill: initial; }
 .calc-crumbs .btn-link { font-size: 12px; }
 .crumb-sep { color: var(--note); }
 .q-input { width: 200px; }
+.period-range { margin-top: 2px; }
+.period-select { max-width: min(360px, 60vw); }
+.seg button:disabled { opacity: .45; cursor: not-allowed; }
+.period-nav { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; }
+.period-nav select { min-width: 0; }

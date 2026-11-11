@@ -1,9 +1,13 @@
 // アプリの状態管理。ブラウザの localStorage に保存（利用者ごとの端末内のみ）。
 // localStorage が使えない環境（プライベートモード等）でも動作するよう、すべて try/catch で保護する。
 import { sampleData } from '../engine/sample.js';
+
 import { sanitizeData, appendLog, chainHash } from '../engine/data.js';
 import { defaultPolicies, sanitizePolicies } from '../engine/policies.js';
 import { deepClone, indexToYm } from '../engine/util.js';
+
+/** 期間の区切り：年度、四半期（発生・累計）、月次（発生・累計） */
+export const GRANULARITIES = ['year', 'quarter', 'quarter_ytd', 'month', 'month_ytd'];
 
 const KEY = 'newlease.v1';
 
@@ -36,7 +40,7 @@ export function init() {
       state.data = res.data;
       state.loadWarnings = res.warnings;
       state.policies = sanitizePolicies(raw.policies);
-      state.ui = { ...state.ui, ...(raw.ui && typeof raw.ui === 'object' ? { granularity: ['quarter', 'quarter_ytd'].includes(raw.ui.granularity) ? raw.ui.granularity : 'year', periodIndex: Number.isInteger(raw.ui.periodIndex) ? raw.ui.periodIndex : null, palette: ['bt', 'blue', 'lightblue', 'green', 'red', 'teal', 'dark'].includes(raw.ui.palette) ? raw.ui.palette : 'bt' } : {}) };
+      state.ui = { ...state.ui, ...(raw.ui && typeof raw.ui === 'object' ? { granularity: GRANULARITIES.includes(raw.ui.granularity) ? raw.ui.granularity : 'year', periodIndex: Number.isInteger(raw.ui.periodIndex) ? raw.ui.periodIndex : null, palette: ['bt', 'blue', 'lightblue', 'green', 'red', 'teal', 'dark'].includes(raw.ui.palette) ? raw.ui.palette : 'bt' } : {}) };
     } catch (e) {
       // 読込に失敗しても元のデータは消さず、別のキーに退避してから初期状態で開く
       try { localStorage.setItem(`${KEY}.backup.${Date.now()}`, JSON.stringify(raw)); } catch { /* 退避できない場合も続行 */ }

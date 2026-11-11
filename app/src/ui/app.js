@@ -5,7 +5,7 @@ import { mountPanel, closeCalc, setContractLink } from './panel.js';
 import { chooseAndGo, goTo } from './nav.js';
 import { setReportUnit } from './pages/contracts.js';
 import { POLICIES } from '../engine/policies.js';
-import { buildPeriods, ymToIndex, fiscalYearOf } from '../engine/util.js';
+import { buildPeriods, ymToIndex, fiscalYearOf, indexToJp } from '../engine/util.js';
 import { buildSchedule } from '../engine/schedule.js';
 import { generateAll } from '../engine/elimination.js';
 import { runChecks, overallStatus } from '../engine/checks.js';
@@ -68,7 +68,7 @@ export function compute() {
   const gen = generateAll(d, period, pol, { schedCache });
   const names = d.config.accountNames || {};
   const checks = runChecks(d, period, pol, gen, names, { schedCache, lockCache });
-  const ctx = { data: d, pol, periods, yearPeriods, period, periodIndex: idx, gen, checks, names, schedCache, companies: d.companies, unit: d.config.unit || '', status: overallStatus(checks) };
+  const ctx = { data: d, pol, periods, yearPeriods, period, periodIndex: idx, range: { minI, maxI, fye }, gen, checks, names, schedCache, companies: d.companies, unit: d.config.unit || '', status: overallStatus(checks) };
   memo = { key: memoKey, ctx };
   return ctx;
 }
@@ -159,14 +159,49 @@ function header() {
         PALETTES.map(([v2, l]) => h('option', { value: v2, selected: state.ui.palette === v2 }, l)))));
 }
 
+// 期間の区切り（年度・四半期・月次）と集計（発生・累計）
+const UNIT_OF = { year: 'year', quarter: 'quarter', quarter_ytd: 'quarter', month: 'month', month_ytd: 'month' };
+const gran = (unit, basis) => (unit === 'year' ? 'year' : basis === 'ytd' ? `${unit}_ytd` : unit);
+
+/** 区切りを切り替えるとき、今の期間の期末を含む期間に合わせる（位置を保つ） */
+function switchGranularity(g, ctx) {
+  const end = ctx.period.end;
+  const list = buildPeriods(ctx.range.minI, ctx.range.maxI, ctx.range.fye, g);
+  let i = list.findIndex((p) => p.end === end);
+  if (i < 0) i = list.findIndex((p) => p.start <= end && end <= p.end);
+  if (i < 0) i = list.findIndex((p) => p.end >= end);
+  setUi({ granularity: g, periodIndex: i >= 0 ? i : null });
+}
+
 function pageHead(page, ctx) {
-  const seg = h('div', { class: 'seg', role: 'group', 'aria-label': '期間の区切り' },
-    [['year', '年度'], ['quarter', '四半期（発生）'], ['quarter_ytd', '四半期（累計）']].map(([v2, l]) => h('button', { type: 'button', class: state.ui.granularity === v2 ? 'on' : '', on: { click: () => setUi({ granularity: v2, periodIndex: null }) } }, l)));
+  const g = state.ui.granularity;
+  const unit = UNIT_OF[g] || 'year';
+  const basis = g.endsWith('_ytd') ? 'ytd' : 'flow';
+  const segUnit = h('div', { class: 'seg', role: 'group', 'aria-label': '期間の区切り' },
+    [['year', '年度'], ['quarter', '四半期'], ['month', '月次']].map(([v2, l]) => h('button', { type: 'button', class: unit === v2 ? 'on' : '', 'aria-pressed': String(unit === v2), on: { click: () => switchGranularity(gran(v2, basis), ctx) } }, l)));
+  const segBasis = h('div', { class: 'seg', role: 'group', 'aria-label': '集計の方法', title: unit === 'year' ? '年度は期首から期末までの集計です' : '発生：その期間だけ、累計：期首からその期間の末まで' },
+    [['flow', '発生'], ['ytd', '累計']].map(([v2, l]) => h('button', { type: 'button', class: unit !== 'year' && basis === v2 ? 'on' : '', disabled: unit === 'year', 'aria-pressed': String(unit !== 'year' && basis === v2), on: { click: () => switchGranularity(gran(unit, v2), ctx) } }, l)));
   const st = ctx.status === 'ok' ? statusBadge('ok', '検算OK') : ctx.status === 'warn' ? statusBadge('warn', '検算：確認事項あり') : statusBadge('ng', '検算：NGあり');
+  const i = ctx.periodIndex;
+  const move = (d) => setUi({ periodIndex: Math.min(ctx.periods.length - 1, Math.max(0, i + d)) });
+  // 期間の一覧は年度ごとにまとめる（月次は件数が多いため）
+  const byFy = new Map();
+  ctx.periods.forEach((p, k) => { const key = p.fyEnd; (byFy.get(key) || byFy.set(key, []).get(key)).push([p, k]); });
+  const sel = h('select', { 'aria-label': '期間', class: 'period-select', on: { change: (e) => setUi({ periodIndex: Number(e.target.value) }) } },
+    unit === 'year' ? ctx.periods.map((p, k) => h('option', { value: k, selected: k === i }, p.label))
+      : [...byFy.values()].map((arr) => h('optgroup', { label: `${indexToJp(arr[0][0].fyEnd)}期末の年度` }, arr.map(([p, k]) => h('option', { value: k, selected: k === i }, p.label)))));
+  const months = ctx.period.end - ctx.period.start + 1;
+  const span = months === 1 ? indexToJp(ctx.period.start) : `${indexToJp(ctx.period.start)}〜${indexToJp(ctx.period.end)}`;
+  const range = `${span}（${months}か月${ctx.period.ytd ? '・期首からの累計' : unit === 'year' ? '' : '・その期間の発生'}）`;
   return h('div', { class: 'page-head' },
-    h('div', null, h('div', { class: 'crumb' }, page.step ? `手順${page.step}／6　${page.label}` : page.label), h('h1', null, ctx.period.label, ' ', h('span', { class: 'badge' }, `金額単位：${ctx.unit}`))),
-    h('div', { class: 'tools' }, seg,
-      h('select', { 'aria-label': '期間', on: { change: (e) => setUi({ periodIndex: Number(e.target.value) }) } }, ctx.periods.map((p, i) => h('option', { value: i, selected: i === ctx.periodIndex }, p.label))),
+    h('div', null, h('div', { class: 'crumb' }, page.step ? `手順${page.step}／6　${page.label}` : page.label),
+      h('h1', null, ctx.period.label, ' ', h('span', { class: 'badge' }, `金額単位：${ctx.unit}`)),
+      h('div', { class: 'small muted period-range' }, `対象期間：${range}`)),
+    h('div', { class: 'tools' }, segUnit, segBasis,
+      h('span', { class: 'period-nav' },
+        h('button', { class: 'btn btn-sm', type: 'button', title: '前の期間（Alt＋←）', 'aria-label': '前の期間', disabled: i <= 0, on: { click: () => move(-1) } }, '◀'),
+        sel,
+        h('button', { class: 'btn btn-sm', type: 'button', title: '次の期間（Alt＋→）', 'aria-label': '次の期間', disabled: i >= ctx.periods.length - 1, on: { click: () => move(1) } }, '▶')),
       h('a', { href: '#checks' }, st)));
 }
 
@@ -237,4 +272,17 @@ setContractLink((id) => {
     { title: `契約の登録：${c.id}`, desc: '契約（物件）の登録・編集画面', page: 'contracts', contractId: c.id, target: 'contract-editor' },
     { title: `返済・償却スケジュールと財務諸表への影響（月次）：${c.id}`, desc: '毎月の元本・利息・償却費・資産・負債・損益への影響', go: () => { setReportUnit('month'); goTo({ page: 'contracts', contractId: c.id, target: 'contract-monthly' }); } },
   ]);
+});
+
+// キーボード：Alt＋←／→ で前後の期間へ（入力中は除く）
+window.addEventListener('keydown', (e) => {
+  if (!e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+  const tag = (document.activeElement && document.activeElement.tagName) || '';
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || document.querySelector('.modal-bg')) return;
+  const ctx = memo.ctx;
+  if (!ctx) return;
+  const i = ctx.periodIndex + (e.key === 'ArrowLeft' ? -1 : 1);
+  if (i < 0 || i >= ctx.periods.length) return;
+  e.preventDefault();
+  guard(() => setUi({ periodIndex: i }));
 });

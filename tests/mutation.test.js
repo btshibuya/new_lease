@@ -19,7 +19,7 @@ const MUTATIONS = [
   ['開始仕訳の税効果を0にする', 'elimination.js', 'res.DTo[co] = taxOf(C, res.Eopen[co], openIdx, pol, R);', 'res.DTo[co] = 0;'],
   ['貸手の定額収益の月数を誤る', 'schedule.js', 'const cum = R((incSeg.total * (m - incSeg.start + 1)) / (incSeg.end - incSeg.start + 1));', 'const cum = R((incSeg.total * (m - incSeg.start + 1)) / (incSeg.end - incSeg.start + 2));'],
   ['利息の月按分を1か月ずらす', 'schedule.js', 'const m = sg.ta + j - 1;', 'const m = sg.ta + j;'],
-  ['C-12で按分比率を無視する', 'elimination.js', 'const dep = R(act.reduce((a, x) => a + (x.lessor.assetDep || 0), 0) * ratio);', 'const dep = R(act.reduce((a, x) => a + (x.lessor.assetDep || 0), 0));'],
+  ['C-12で按分比率を無視する', 'elimination.js', 'const dep = lessorDepBetween(sched, period.start, period.end, ratio, R);', 'const dep = lessorDepBetween(sched, period.start, period.end, 1, R);'],
   ['持分変動を資本剰余金に分けない', 'elimination.js', 'const capPart = capClose - capOpen;', 'const capPart = 0;'],
   ['解約益の取消の符号を誤る', 'elimination.js', "if (t.gain) lines.push(ln('TERM_GAIN', lesseeCo, t.gain, meta,", "if (t.gain) lines.push(ln('TERM_GAIN', lesseeCo, -t.gain, meta,"],
   ['違約金を消去しない', 'elimination.js', "    if (le.penalty) {\n      lines.push(ln('PENALTY_INC'", "    if (false) {\n      lines.push(ln('PENALTY_INC'"],

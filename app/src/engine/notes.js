@@ -7,6 +7,7 @@ import { round } from './util.js';
 import { toCsv, validCode } from './data.js';
 import { parseCsv } from './contractCsv.js';
 import { maturity } from './reports.js';
+import { lessorDepBetween } from './schedule.js';
 
 export const ASSET_CLASS_LABELS = { building: '建物', machine: '機械装置', vehicle: '車両運搬具', tool: '工具器具備品', land: '土地', other: 'その他' };
 export const BUCKETS = [
@@ -113,7 +114,7 @@ export function groupNoteAmounts(gen, period, pol) {
     if (lr.assetCost > 0 && ['building', 'land'].includes(c.assetClass)) {
       const ratio = lr.ratio ?? 1;
       if (alive) push('X-RE', c, c.lessorCo, R(lr.assetCost * ratio) - R((endRec.lessor.assetAcc_end || 0) * ratio));
-      const dep = R(inP.filter((x) => x.m >= sched.meta.start).reduce((a, x) => a + (x.lessor.assetDep || 0), 0) * ratio);
+      const dep = lessorDepBetween(sched, period.start, period.end, ratio, R);
       push('X-REINC', c, c.lessorCo, ps.inc - dep, `賃貸収益 ${ps.inc} − 減価償却費 ${dep}`);
     }
   }

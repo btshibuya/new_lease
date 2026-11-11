@@ -472,3 +472,12 @@ export function periodSummary(sched, startIdx, endIdx) {
     lastRec: inP[inP.length - 1] || null,
   };
 }
+
+/**
+ * 貸手資産の減価償却費（リース期間中の分・按分後）を期間で求める。
+ * 端数処理は「期首からの累計を丸めた額の差」で行うため、月次・四半期・年度のどの区切りでも合計が一致する。
+ */
+export function lessorDepBetween(sched, start, end, ratio, R) {
+  const cum = (idx) => sched.months.filter((x) => x.m >= sched.meta.start && x.m <= idx).reduce((a, x) => a + (x.lessor.assetDep || 0), 0);
+  return R(cum(end) * ratio) - R(cum(start - 1) * ratio);
+}

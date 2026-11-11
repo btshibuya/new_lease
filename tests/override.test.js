@@ -140,3 +140,28 @@ test('セキュリティ：保存データの注記の収集値・手修正で�
   assert.deepEqual(Object.keys(d.noteInputs['2028-03']), ['P']);
   assert.deepEqual(d.overrides.journals[0].lines, [{ acc: 'ROU_ACC', co: 'S1', amt: 5, label: '' }]);
 });
+
+test('月次（発生・累計）：期末月の累計＝年度、各月の累計の損益＝発生の合計、残高は期末で一致、検算は NG なし', () => {
+  const mo = buildPeriods(ymToIndex('2027-04'), ymToIndex('2029-03'), 3, 'month');
+  const ytd = buildPeriods(ymToIndex('2027-04'), ymToIndex('2029-03'), 3, 'month_ytd');
+  const yr = buildPeriods(ymToIndex('2027-04'), ymToIndex('2029-03'), 3, 'year');
+  assert.equal(mo.length, 24); assert.equal(ytd.length, 24);
+  const plOf = (js) => { const m = {}; for (const j of js) for (const l of j.lines) if (['DEP_ROU', 'INT', 'LEASE_INC', 'TAX_ADJ', 'NCI_PL', 'RENTAL_DEP', 'DEP_RECLASS', 'SHORT_COST', 'ASC_COST', 'PRE_RENT', 'TERM_GAIN', 'MOD_GAIN'].includes(l.acc)) { const k = `${l.acc}|${l.co}|${j.contractId}`; m[k] = (m[k] || 0) + l.amt; } for (const k of Object.keys(m)) if (!m[k]) delete m[k]; return m; };
+  const bsOf = (js) => { const m = {}; for (const j of js) for (const l of j.lines) if (!['DEP_ROU', 'INT', 'LEASE_INC', 'TAX_ADJ', 'NCI_PL', 'RENTAL_DEP', 'DEP_RECLASS', 'SHORT_COST', 'ASC_COST', 'PRE_RENT', 'TERM_GAIN', 'MOD_GAIN', 'RE_OPEN'].includes(l.acc)) { const k = `${l.acc}|${l.co}|${j.contractId}`; m[k] = (m[k] || 0) + l.amt; } for (const k of Object.keys(m)) if (!m[k]) delete m[k]; return m; };
+  for (let y = 0; y < 2; y++) {
+    assert.deepEqual(net(generateAll(base, ytd[y * 12 + 11], pol).journals), net(generateAll(base, yr[y], pol).journals), yr[y].label);
+    const sum = {};
+    for (let k = 0; k < 12; k++) {
+      const p = mo[y * 12 + k];
+      const g = generateAll(base, p, pol);
+      for (const [key, v] of Object.entries(plOf(g.journals))) sum[key] = (sum[key] || 0) + v;
+      for (const kk of Object.keys(sum)) if (!sum[kk]) delete sum[kk];
+      const gy = generateAll(base, ytd[y * 12 + k], pol);
+      assert.deepEqual(plOf(gy.journals), sum, `${ytd[y * 12 + k].label} 損益＝発生の合計`);
+      assert.deepEqual(bsOf(g.journals), bsOf(gy.journals), `${p.label} 期末残高は発生・累計で同じ`);
+      if (k % 3 === 2) {
+        for (const [pp, gg] of [[p, g], [ytd[y * 12 + k], gy]]) assert.deepEqual(runChecks(base, pp, pol, gg).filter((c) => c.status === 'ng').map((c) => c.id), [], pp.label);
+      }
+    }
+  }
+});

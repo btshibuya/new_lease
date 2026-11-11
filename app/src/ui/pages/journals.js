@@ -113,6 +113,11 @@ function carryCard(ctx) {
 /** 期間の翌期（同じ区切り）。一覧の最後なら同じ長さで作る */
 function nextPeriodOf(ctx) {
   const { periods, periodIndex, period } = ctx;
+  // 累計（期首から）の表示では、翌期＝次の年度（期首が同じ次の累計期間の開始仕訳は当期と同じになるため）
+  if (period.ytd) {
+    const y = ctx.yearPeriods.find((p) => p.start === period.fyEnd + 1);
+    return y || { start: period.fyEnd + 1, end: period.fyEnd + 12, label: '翌年度', fyEnd: period.fyEnd + 12 };
+  }
   if (periods[periodIndex + 1]) return periods[periodIndex + 1];
   const len = period.end - period.start + 1;
   return { start: period.end + 1, end: period.end + len, label: `${period.label}の翌期`, fyEnd: period.fyEnd + (len === 12 ? 12 : 0) };
