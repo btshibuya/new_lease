@@ -10,6 +10,7 @@ import { guard } from './app.js';
  */
 export function goTo(t) {
   guard(() => {
+    rememberReturn();
     if (t.contractId) setUi({ contractId: t.contractId });
     if (location.hash !== `#${t.page}`) location.hash = `#${t.page}`;
     else window.dispatchEvent(new HashChangeEvent('hashchange'));
@@ -61,4 +62,39 @@ export function chooseAndGo(title, candidates) {
   overlay = h('div', { class: 'modal-bg', on: { keydown: (e) => { if (e.key === 'Escape') close(); }, click: (e) => { if (e.target === overlay) close(); } } }, box);
   document.body.appendChild(overlay);
   list.querySelector('button')?.focus();
+}
+
+// ── 元の画面へ戻る：ジャンプする前の画面・スクロール位置を覚え、画面の左下に「戻る」ボタンを出す ──
+const returns = [];
+let restoreHook = null; // 画面ごとの状態（仕訳帳の絞り込みなど）を覚えて戻すための関数（journals.js が設定）
+export function setRestoreHook(fn) { restoreHook = fn; }
+
+/** いまの画面を「戻り先」として覚える（ジャンプの直前に呼ぶ） */
+export function rememberReturn() {
+  const title = document.querySelector('.step-title')?.textContent?.replace(/^\d+/, '').trim() || document.title;
+  returns.push({ hash: location.hash || '#dashboard', y: window.scrollY, title, extra: restoreHook ? restoreHook.save() : null });
+  if (returns.length > 10) returns.shift();
+  drawReturn();
+}
+
+function drawReturn() {
+  let box = document.getElementById('return-box');
+  if (!returns.length) { if (box) box.remove(); return; }
+  const last = returns[returns.length - 1];
+  const btn = h('button', { class: 'btn btn-primary', type: 'button', title: 'ジャンプする前の画面・位置に戻ります', on: { click: () => goBack() } }, `← ${last.title} に戻る`);
+  const close = h('button', { class: 'btn btn-sm', type: 'button', 'aria-label': '戻るボタンを閉じる', on: { click: () => { returns.length = 0; drawReturn(); } } }, '×');
+  if (!box) { box = h('div', { id: 'return-box', class: 'return-box', role: 'navigation', 'aria-label': '元の画面へ戻る' }); document.body.appendChild(box); }
+  box.replaceChildren(...[btn, returns.length > 1 ? h('span', { class: 'small muted' }, `（あと${returns.length - 1}つ前まで戻れます）`) : null, close].filter(Boolean));
+}
+
+function goBack() {
+  const r = returns.pop();
+  drawReturn();
+  if (!r) return;
+  guard(() => {
+    if (r.extra && restoreHook) restoreHook.load(r.extra);
+    if (location.hash !== r.hash) location.hash = r.hash;
+    else window.dispatchEvent(new HashChangeEvent('hashchange'));
+    setTimeout(() => window.scrollTo({ top: r.y, behavior: 'smooth' }), 200);
+  });
 }

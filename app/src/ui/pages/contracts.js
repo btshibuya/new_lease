@@ -189,12 +189,12 @@ function actualsCard(c, sc, periods) {
     const judge = (f) => (a[f] === undefined || a[f] === null ? h('span', { class: 'muted' }, '—') : Number(a[f]) === r[f] ? statusBadge('ok', '一致') : statusBadge('ng', `差異 ${fmt(Number(a[f]) - r[f])}`));
     return h('tr', null, h('td', null, r.p.label), ...fields.map(([f]) => (r[f] === null ? h('td', { class: 'muted' }, '（年度末のみ）') : h('td', null, inp(f), h('div', { class: 'small muted' }, `計算値 ${fmt(r[f])}`), judge(f)))));
   });
-  return card('個別の帳簿残高（実績）との突合',
-    h('div', { class: 'alert alert-info' }, '借手・貸手の個別帳簿の金額を入力すると、アプリの計算値と比較します（検算 CHK-10）。表示中の期間区分（年度／四半期）の期末ごとに入力できます。受取リース料は年度の金額で、年度末の行にだけ入力します。差異があれば原因（割引率・支払条件・端数処理・計上漏れ等）を調査し、必要に応じて個社修正を行います。'),
+  return withId('actuals', card('個別の帳簿残高（実績）との突合',
+    h('div', { class: 'alert alert-info' }, '借手・貸手の個別帳簿の金額を入力すると、アプリの計算値と比較します（検算 CHK-10）。表示中の期間の区切り（年度・四半期・月次）の期末ごとに入力できます。受取リース料は年度の金額で、年度末の行にだけ入力します。差異があれば原因（割引率・支払条件・端数処理・計上漏れ等）を調査し、必要に応じて個社修正を行います。'),
     h('div', { class: 'table-wrap' }, h('table', { class: 'tbl compact' },
       h('thead', null, h('tr', null, h('th', null, '期間'), ...fields.map(([, l]) => h('th', null, `${l}（帳簿）`)))),
       h('tbody', null, rows))),
-    h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', on: { click: () => update((d) => { const t = d.contracts.find((x) => x.id === c.id); t.actuals = sanitizeContract({ ...t, actuals: draft }).actuals; }, '実績入力', c.id) } }, '実績を保存')));
+    h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', on: { click: () => update((d) => { const t = d.contracts.find((x) => x.id === c.id); t.actuals = sanitizeContract({ ...t, actuals: draft }).actuals; }, '実績入力', c.id) } }, '実績を保存'))));
 }
 
 /** 条件変更（再測定）の入力欄 */

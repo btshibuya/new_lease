@@ -378,3 +378,13 @@ td.hl, .hl:not(rect) { fill: initial; }
 .period-nav select { min-width: 0; }
 .calc-bk-head { align-items: center; gap: 6px; }
 .calc-bk-head h3 { margin: 10px 0 4px; }
+.return-box { position: fixed; left: 16px; bottom: 16px; z-index: 60; display: flex; align-items: center; gap: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; box-shadow: 0 4px 16px rgba(20, 37, 74, .18); max-width: calc(100vw - 32px); }
+.return-box .btn-primary { white-space: normal; text-align: left; }
+@media print { .return-box { display: none; } }
+.filter-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+.filter-chip { display: inline-flex; align-items: center; gap: 4px; }
+.chip-x { border: 0; background: none; cursor: pointer; color: var(--sub); font-size: 13px; padding: 0 2px; }
+.tbl td.q-hit, .tbl tr.q-hit-row td { background: var(--hl) !important; }
+/* 画面下の保存バーがある画面では、戻るボタンを保存バーの上に出す */
+body:has(.save-bar) .return-box { bottom: 84px; }
+@media (max-width: 760px) { .return-box { left: 8px; bottom: 8px; padding: 6px 8px; font-size: 12.5px; } body:has(.save-bar) .return-box { bottom: 120px; } }

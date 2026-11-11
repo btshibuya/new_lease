@@ -2,6 +2,9 @@ import { h, card, statusBadge, table, toast, ask } from '../dom.js';
 import { kpi } from '../components.js';
 import { state, update, lockPeriod, unlockPeriod, isLocked } from '../store.js';
 import { snapshotNets } from '../../engine/checks.js';
+import { chooseAndGo, goTo } from '../nav.js';
+import { setReportUnit } from './contracts.js';
+import { focusJournals } from './journals.js';
 
 export function renderChecks(ctx) {
   const { checks, period, gen, status, names } = ctx;
@@ -47,5 +50,17 @@ export function renderChecks(ctx) {
       h('p', null, c.detail),
       c.id === 'CHK-12' && c.rows.length ? noteInput('CHK-12') : null,
       c.rows.length ? h('details', { open: c.status === 'ng' }, h('summary', null, `明細（${c.rows.length}件）`),
-        table([{ label: '判定', render: (r) => h('td', null, r.ok ? statusBadge('ok') : r.warn ? statusBadge('warn') : c.status === 'ok' ? statusBadge('ok') : statusBadge(c.status)) }, { label: '契約', key: 'contract' }, { label: '内容', key: 'message' }], c.rows, { className: 'compact' })) : null)));
+        table([{ label: '判定', render: (r) => h('td', null, r.ok ? statusBadge('ok') : r.warn ? statusBadge('warn') : c.status === 'ok' ? statusBadge('ok') : statusBadge(c.status)) }, { label: '契約', render: (r) => contractCell(r.contract, ctx) }, { label: '内容', key: 'message' }], c.rows, { className: 'compact' })) : null)));
+}
+
+/** 検算の明細の契約番号から、関連する画面（契約の登録・月次レポート・仕訳帳）へ */
+function contractCell(id, ctx) {
+  const c = ctx.data.contracts.find((x) => x.id === id);
+  if (!c) return h('td', { class: 'nw' }, id ?? '');
+  return h('td', { class: 'nw' }, h('button', { class: 'btn-link contract-link', type: 'button', title: '関連する画面へ', on: { click: () => chooseAndGo(`検算の明細：契約 ${c.id} ${c.name}`, [
+    { title: `契約の登録：${c.id}`, desc: '契約（物件）の登録・編集画面', page: 'contracts', contractId: c.id, target: 'contract-editor' },
+    { title: `返済・償却スケジュールと財務諸表への影響（月次）：${c.id}`, desc: '毎月の元本・利息・償却費・残高・イベント', go: () => { setReportUnit('month'); goTo({ page: 'contracts', contractId: c.id, target: 'contract-monthly' }); } },
+    { title: `仕訳帳（契約 ${c.id} で絞り込み）`, desc: 'この契約の当期の仕訳', go: () => focusJournals({ contract: c.id }) },
+    { title: `個別の帳簿残高（実績）との突合：${c.id}`, desc: '検算 CHK-10 の入力欄', page: 'contracts', contractId: c.id, label: undefined, target: 'actuals' },
+  ]) } }, c.id));
 }

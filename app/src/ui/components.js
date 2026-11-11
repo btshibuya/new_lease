@@ -63,11 +63,17 @@ export function journalCard(j, ctx, opts = {}) {
   };
   for (let i = 0; i < n; i++) {
     const d = dr[i], c = cr[i];
+    // 検索に一致した行（金額・科目）は強調する
+    const hit = (l) => (l && opts.hl && opts.hl(l) ? 'q-hit' : '');
+    const dAmt = d ? amt(d.amt, { calc: opts.noBasis ? null : info(d) }) : h('td');
+    const cAmt = c ? amt(-c.amt, { calc: opts.noBasis ? null : info(c) }) : h('td');
+    if (hit(d)) dAmt.classList.add('q-hit');
+    if (hit(c)) cAmt.classList.add('q-hit');
     rows.push(h('tr', null,
-      h('td', null, d ? h('span', null, accountLabel(d, pol, names), h('span', { class: 'co' }, coName(d.co, companies))) : ''),
-      d ? amt(d.amt, { calc: opts.noBasis ? null : info(d) }) : h('td'),
-      h('td', null, c ? h('span', null, accountLabel(c, pol, names), h('span', { class: 'co' }, coName(c.co, companies))) : ''),
-      c ? amt(-c.amt, { calc: opts.noBasis ? null : info(c) }) : h('td')));
+      h('td', { class: hit(d) }, d ? h('span', null, accountLabel(d, pol, names), h('span', { class: 'co' }, coName(d.co, companies))) : ''),
+      dAmt,
+      h('td', { class: hit(c) }, c ? h('span', null, accountLabel(c, pol, names), h('span', { class: 'co' }, coName(c.co, companies))) : ''),
+      cAmt));
   }
   const tot = dr.reduce((a, l) => a + l.amt, 0);
   const totC = -cr.reduce((a, l) => a + l.amt, 0);
@@ -76,7 +82,7 @@ export function journalCard(j, ctx, opts = {}) {
     h('thead', null, h('tr', null, h('th', null, '借方科目'), h('th', null, '金額'), h('th', null, '貸方科目'), h('th', null, '金額'))),
     h('tbody', null, rows, h('tr', { class: 'total' }, h('td', null, '合計'), amt(tot), h('td', null, balanced ? statusBadge('ok', '貸借一致') : statusBadge('ng', '貸借不一致')), amt(totC)))));
   // スマホ用：1行に1科目（科目｜借方｜貸方）。会社は会社コードで短く表示する
-  const mRows = [...dr, ...cr].map((l) => h('tr', null,
+  const mRows = [...dr, ...cr].map((l) => h('tr', { class: opts.hl && opts.hl(l) ? 'q-hit-row' : '' },
     h('td', null, accountLabel(l, pol, names), h('span', { class: 'co' }, l.co === 'CONSOL' ? '連結' : l.co)),
     l.amt > 0 ? amt(l.amt, { calc: opts.noBasis ? null : info(l) }) : h('td'),
     l.amt < 0 ? amt(-l.amt, { calc: opts.noBasis ? null : info(l) }) : h('td')));
