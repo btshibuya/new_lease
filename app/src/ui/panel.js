@@ -1,8 +1,9 @@
 // 右の「計算の確認」欄（ビジネストラストのデザイン：design/DESIGN.md の panel）
 // 数値を押すと開き、値・式・値を入れた式・内訳・ドリルダウン・出典を表示する。
 // メニューを切り替えたとき・Esc・×で閉じる。「← 戻る」で直前の表示に戻る。
-import { h, clear, setCalcHook } from './dom.js';
+import { h, clear, setCalcHook, download } from './dom.js';
 import { fmt } from '../engine/util.js';
+import { toCsv } from '../engine/data.js';
 
 const st = { el: null, stack: [], anchors: [] };
 
@@ -19,6 +20,7 @@ const st = { el: null, stack: [], anchors: [] };
  *   notes: ['...'],                    // 補足
  *   sources: [{ label, kind }]         // 出典（kind: journal / manual / carry）
  *   links: [{ label, go }]             // 関連する画面へのリンク（元帳・仕訳帳など）
+ *   more: [{ label, desc, open }]      // さらに分解する（open() が次の段階の内容を返す。パンくずで戻れる）
  * }
  */
 // 内訳の契約番号から契約へ移動する関数（app.js が設定。存在しない契約番号なら null を返す）
@@ -34,7 +36,8 @@ export function mountPanel(el) {
 export function openCalc(info, anchor) {
   if (!st.el) return;
   for (const a of st.anchors) a.classList.remove('hl-main');
-  if (anchor) { anchor.classList.add('hl-main'); st.anchors = [anchor]; }
+  // 画面の数値を押したときは新しい経路を始める（「さらに分解する」は同じ経路に積む）
+  if (anchor) { anchor.classList.add('hl-main'); st.anchors = [anchor]; st.stack = []; }
   st.stack.push(info);
   render();
   st.el.scrollTop = 0;
@@ -112,7 +115,9 @@ function render() {
   }
   if (info.breakdown && info.breakdown.rows && info.breakdown.rows.length) {
     const b = info.breakdown;
-    el.append(h('h3', null, b.title || '内訳'),
+    // 内訳は CSV で書き出して、表計算ソフトで検算できる
+    const exportCsv = () => download(`計算の確認_${String(info.title || '内訳').replace(/[\\/:*?"<>|]/g, '_').slice(0, 40)}.csv`, toCsv([[info.context || '', info.title || '', info.value ?? ''], [], b.cols.map((c) => c.label), ...b.rows.map((r) => b.cols.map((c) => r[c.key] ?? ''))]), 'text/csv;charset=utf-8');
+    el.append(h('div', { class: 'row calc-bk-head' }, h('h3', null, b.title || '内訳'), h('span', { class: 'spacer' }), h('button', { class: 'btn btn-sm', type: 'button', title: '内訳を表計算ソフト用に書き出す', on: { click: exportCsv } }, 'CSV')),
       h('div', { class: 'tbl-wrap' }, h('table', { class: 'tbl drill-tbl' },
         h('thead', null, h('tr', null, b.cols.map((c) => h('th', null, c.label)))),
         h('tbody', null, b.rows.map((r) => h('tr', { class: r.total ? 'total' : '' }, b.cols.map((c) => {
@@ -122,6 +127,10 @@ function render() {
           if (go) return h('td', null, badge, h('button', { class: 'btn-link contract-link', type: 'button', title: '契約の登録画面・月次レポートへ', on: { click: go } }, text));
           return h('td', { class: c.num ? 'num' : '' }, badge, text);
         })))))));
+  }
+  // さらに分解する（同じ欄の中で次の段階へ。パンくずで戻れる）
+  if (info.more && info.more.length) {
+    el.append(h('h3', null, 'さらに分解する'), h('div', { class: 'actions' }, info.more.map((m) => h('button', { class: 'btn btn-sm', type: 'button', title: m.desc || '', on: { click: () => { try { openCalc(m.open()); } catch (e) { openCalc({ title: m.label, value: '', notes: [`分解できませんでした：${e.message}`] }); } } } }, `${m.label} ›`))));
   }
   if (info.drill && info.drill.rows && info.drill.rows.length) {
     el.append(h('h3', null, info.drill.title || '計算過程のドリルダウン'),

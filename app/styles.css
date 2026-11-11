@@ -376,3 +376,5 @@ td.hl, .hl:not(rect) { fill: initial; }
 .seg button:disabled { opacity: .45; cursor: not-allowed; }
 .period-nav { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; }
 .period-nav select { min-width: 0; }
+.calc-bk-head { align-items: center; gap: 6px; }
+.calc-bk-head h3 { margin: 10px 0 4px; }
