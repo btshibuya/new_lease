@@ -32,7 +32,7 @@ export const NOTE_SECTIONS = [
  */
 export const NOTE_ITEMS = [
   { id: 'L-LIAB', sec: 'L-P', title: 'リース負債が含まれる科目と金額', when: '期末', kind: 'calc', byList: [['cur', '流動（1年以内）'], ['nc', '固定（1年超）']],
-    desc: '貸借対照表でリース負債を区分して表示しない場合に、リース負債が含まれる科目（流動負債の「その他」、固定負債の「その他」など）と金額を注記します。使用権資産を区分して表示しない場合は、上の「科目ごとの使用権資産の帳簿価額」で含まれる科目と金額を示します。グループ内の分は、借手の期末のリース負債（流動・固定）です。' },
+    desc: '貸借対照表でリース負債を区分して表示しない場合に、リース負債が含まれる科目（流動負債の「その他」、固定負債の「その他」など）と金額を注記します。使用権資産を区分して表示しない場合は、上の「科目ごとの使用権資産の帳簿価額」で含まれる科目と金額を示します。グループ内の分は、借手の個別の期末のリース負債（流動・固定。会社マスタで「流動区分なし」の会社は全額を固定）です。' },
   { id: 'L-NBV', sec: 'L-A', title: '科目ごとの使用権資産の帳簿価額', when: '期末', kind: 'calc', byClass: true,
     desc: '期末の使用権資産の帳簿価額（取得原価−減価償却累計額）を、対応する原資産を自ら所有していたと仮定した場合に表示する科目（建物、機械装置など）ごとに記載します。' },
   { id: 'L-SHORT', sec: 'L-A', title: '短期リースに係る費用', when: '当期', kind: 'calc',
@@ -87,7 +87,7 @@ export function noteRows() {
  * グループ内リース分（アプリで計算する項目）を契約別に求める。
  * @returns {Map<string, {amount:number, rows:{contract,name,co,amt,note}[]}>} key＝行のキー
  */
-export function groupNoteAmounts(gen, period, pol) {
+export function groupNoteAmounts(gen, period, pol, companies = []) {
   const R = (v) => round(v, pol['POL-11'] || 'half_up');
   const out = new Map(noteRows().map((r) => [r.key, { amount: 0, rows: [] }]));
   const push = (key, c, co, amt, note = '') => {
@@ -110,7 +110,13 @@ export function groupNoteAmounts(gen, period, pol) {
       const rm = inP.reduce((a, x) => a + (x.lessee.remeasure ? Math.max(0, x.lessee.remeasure.dL) : 0), 0);
       push('L-ADD', c, c.lesseeCo, cm + rm, rm ? `条件変更による増加 ${rm} を含む` : '');
       push(`L-DEP.${cls}`, c, c.lesseeCo, ps.dep);
-      if (alive) { push('L-LIAB.cur', c, c.lesseeCo, r.cur || 0); push('L-LIAB.nc', c, c.lesseeCo, ps.close.L - (r.cur || 0)); }
+      if (alive) {
+        // 個別の注記額と同じ基準：流動区分をしない会社（会社マスタの「流動区分なし」）は全額を固定に含める
+        const split = companies.find((x) => x.code === c.lesseeCo)?.splitsCurrent !== false;
+        const cur = split ? r.cur || 0 : 0;
+        push('L-LIAB.cur', c, c.lesseeCo, cur);
+        push('L-LIAB.nc', c, c.lesseeCo, ps.close.L - cur, split ? '' : '流動区分なしの会社のため全額を固定に含める');
+      }
       if (model === 'jgaap') push('X-INT', c, c.lesseeCo, (ps.int || 0) + (ps.accr || 0));
     } else if ((c.lessee.offKind || 'short') === 'short') push('L-SHORT', c, c.lesseeCo, ps.cost);
     const pen = inP.reduce((a, x) => a + (x.lessee.penalty || 0), 0);
@@ -226,7 +232,7 @@ export function sanitizeNoteInputs(raw) {
     if (!/^\d{4}-\d{2}$/.test(pk) || !byCo || typeof byCo !== 'object') continue;
     for (const [co, byKey] of Object.entries(byCo).slice(0, 500)) {
       // 会社コードは会社マスタと同じ規則（__proto__・constructor 等の予約語は不可：プロトタイプ汚染の防止）
-      if (!validCode(co) || !/^[A-Za-z0-9_-]{1,20}$/.test(co) || !byKey || typeof byKey !== 'object') continue;
+      if (!validCode(co) || !byKey || typeof byKey !== 'object') continue;
       for (const [k, v] of Object.entries(byKey)) {
         if (!keys.has(k) || !v || typeof v !== 'object') continue;
         if (!own(out, pk)) out[pk] = {};

@@ -29,6 +29,8 @@ export function focusJournals(opts = {}) {
 
 export function renderJournals(ctx) {
   const { gen, pol, names, companies, period, data } = ctx;
+  // 会社マスタで削除・コード変更された会社が選んだままになっていたら、すべての会社に戻す
+  if (filter.company !== 'all' && filter.company !== 'CONSOL' && !companies.some((c) => c.code === filter.company)) filter.company = 'all';
   const rerender = () => window.dispatchEvent(new HashChangeEvent('hashchange'));
   const match = (j) => (filter.kind === 'all' || j.kind === filter.kind) && (filter.contract === 'all' || j.contractId === filter.contract) && (filter.content === 'all' || contentKey(j) === filter.content || (j.src || j.tpl) === filter.content || (filter.content === 'OPEN' && (String(j.tpl).startsWith('C-01') || j.tpl === 'M-01O')));
   // 金額・科目名で探す：帳簿の金額（桁区切り・△可）または科目名の一部から、その金額・科目を含む仕訳を逆引きする
@@ -146,23 +148,27 @@ function nextOpeningCard(ctx, match) {
   try { gen2 = generateAll(data, np, pol, { schedCache }); } catch (e) { return card('翌期の開始仕訳', h('div', { class: 'alert alert-err' }, e.message)); }
   const opens = gen2.journals.filter((j) => ['C-01', 'C-01T', 'C-01N', 'M-01O'].includes(j.tpl) && (filter.contract === 'all' || j.contractId === filter.contract) && (filter.kind === 'all' || j.kind === filter.kind));
   if (!opens.length) return card(`翌期の開始仕訳（${np.label}の期首）`, emptyState(pol['POL-03'] === 'balance' ? '会計方針 POL-03 が「期末残高一括消去」のため、開始仕訳は作りません。' : '翌期に引き継ぐ仕訳はありません。'));
-  // 会社別：連結（CONSOL）の行は、その仕訳の貸手の会社に含める（組替の相手勘定のため）
-  const coOf = (j, l) => (l.co === 'CONSOL' ? j.lessorCo || 'CONSOL' : l.co);
+  // 会社別：すべての会社を表示するときは、連結（CONSOL）の行をその仕訳の貸手の会社に含める（組替の相手勘定のため、貸借がそろう）。
+  // 会社で絞り込むときは、当期の仕訳・精算表と同じく行の会社（l.co）で分ける（連結の行は「連結」を選ぶと表示）
+  const coOf = filter.company === 'all' ? (j, l) => (l.co === 'CONSOL' ? j.lessorCo || 'CONSOL' : l.co) : (j, l) => l.co;
   const groups = new Map();
   for (const j of opens) {
     const r = gen2.results.find((x) => x.contract.id === j.contractId);
     const tr = r && j.src ? openingTrace(r, j, yearPeriods, pol, companies) : [];
     for (const co of [...new Set(j.lines.map((l) => coOf(j, l)))]) {
+      if (filter.company !== 'all' && co !== filter.company) continue;
       const k = `${contentKey(j)}|${co}`;
       const g = groups.get(k) || groups.set(k, { j0: j, co, parts: [], trace: [] }).get(k);
       g.parts.push({ ...j, company: co, lines: j.lines.filter((l) => coOf(j, l) === co) });
-      g.trace.push(...tr.filter((x) => (x.co === 'CONSOL' ? j.lessorCo : x.co) === co).map((x) => ({ ...x, contract: j.contractId })));
+      g.trace.push(...tr.filter((x) => coOf(j, x) === co).map((x) => ({ ...x, contract: j.contractId })));
     }
   }
   const list = [...groups.values()].filter((g) => filter.company === 'all' || g.co === filter.company).sort((a, b) => contentOrder(a.j0, b.j0) || String(a.co).localeCompare(String(b.co)));
   const coName = (code) => (code === 'CONSOL' ? '連結' : companies.find((c) => c.code === code)?.name || code);
   const cardsEl = list.map((g) => {
-    const agg = { id: `N-${contentKey(g.j0)}-${g.co}`, tpl: g.j0.tpl, src: g.j0.src, kind: g.j0.kind, title: contentName(g.j0), company: g.co, groupLabel: `${coName(g.co)}：${g.parts.length}契約`, lines: aggregateLines(g.parts.flatMap((p) => p.lines), pol, names), parts: g.parts };
+    const lines = aggregateLines(g.parts.flatMap((p) => p.lines), pol, names);
+    const partial = lines.reduce((a, l) => a + l.amt, 0) !== 0; // 会社で絞り込み、相手の行が別の会社・連結にある
+    const agg = { id: `N-${contentKey(g.j0)}-${g.co}`, tpl: g.j0.tpl, src: g.j0.src, kind: g.j0.kind, title: contentName(g.j0), company: g.co, groupLabel: `${coName(g.co)}：${g.parts.length}契約`, lines, parts: g.parts, partial };
     const years = [...new Set(g.trace.map((x) => x.year))];
     const traceRows = g.trace.slice().sort((a, b) => years.indexOf(a.year) - years.indexOf(b.year) || a.contract.localeCompare(b.contract));
     const traceTbl = traceRows.length ? h('details', { class: 'basis' }, h('summary', null, `前期以前のどの仕訳から生じたか（年度別：${years.length}年度・${traceRows.length}行）`),

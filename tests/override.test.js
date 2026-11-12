@@ -202,7 +202,7 @@ test('手修正：累計の期間どうしなど期間が重なる手修正は�
   assert.ok(c18.rows.some((r) => /期間が重なる手修正/.test(r.message)));
 });
 
-import { companyMonthly } from '../app/src/engine/reports.js';
+import { companyMonthly, worksheet } from '../app/src/engine/reports.js';
 
 test('会社別の集計：全社の借手の項目の合計＝全契約の合計、会社の純資産修正額の合計＝全契約の消去差額、年度に集計しても一致', () => {
   const items = base.contracts.map((c) => ({ contract: c, sched: buildSchedule(c, pol, { lesseeCompany: base.companies.find((x) => x.code === c.lesseeCo) }) }));
@@ -214,12 +214,36 @@ test('会社別の集計：全社の借手の項目の合計＝全契約の合�
     for (const k of Object.keys(o)) o[k] += r[k];
     tot.set(r.m, o);
     // 契約ごとの内訳の合計＝会社の行
-    for (const k of ['int', 'L', 'inc', 'cumE']) assert.equal(r.parts.reduce((a, p) => a + (p[k] || 0), 0), r[k], `${co} ${r.m} ${k}`);
+    // 画面に表示するすべての列で、契約ごとの内訳の合計＝会社の行
+    for (const k of ['pay', 'principal', 'int', 'L', 'dep', 'assets', 'liabs', 'lesseeExp', 'inc', 'R', 'cumE', 'plImpact']) assert.equal(r.parts.reduce((a, p) => a + (p[k] || 0), 0), r[k], `${co} ${r.m} ${k}`);
   }
   for (const [m, o] of byM) assert.deepEqual(tot.get(m), o, `月 ${m}`);
   const YRS = buildPeriods(ymToIndex('2024-04'), ymToIndex('2040-03'), 3, 'year');
   const s1 = companyMonthly(items, 'S1', pol);
   const y = rollupMonthly(s1, YRS);
-  for (const r of y) assert.ok(Number.isFinite(r.pay) && Number.isFinite(r.plEffect), r.label);
-  assert.equal(y.reduce((a, r) => a + r.plEffect, 0), s1[s1.length - 1].cumE - (s1[0].cumE - s1[0].plEffect));
+  for (const r of y) assert.ok(Number.isFinite(r.pay) && Number.isFinite(r.eChange) && Number.isFinite(r.plImpact), r.label);
+  assert.equal(y.reduce((a, r) => a + r.eChange, 0), s1[s1.length - 1].cumE - (s1[0].cumE - s1[0].eChange));
+  // イベントは重複なく並ぶ
+  for (const r of y) { const ev = r.event ? r.event.split('・') : []; assert.equal(new Set(ev).size, ev.length, r.label); }
+});
+
+test('会社別の集計：この会社の連結損益への影響（税引前）＝会社で抽出した精算表の損益の修正（税効果・非支配株主損益を除く）。C-12 の組替の有無どちらでも一致', () => {
+  for (const p5 of ['by_lessee_dept', 'as_is']) {
+    const pl5 = { ...pol, 'POL-05': p5 };
+    const items = base.contracts.map((c) => ({ contract: c, sched: buildSchedule(c, pl5, { lesseeCompany: base.companies.find((x) => x.code === c.lesseeCo) }) }));
+    const YRS = buildPeriods(ymToIndex('2024-04'), ymToIndex('2034-03'), 3, 'year');
+    const mo = new Map(base.companies.map((c) => [c.code, companyMonthly(items, c.code, pl5)]));
+    let nonzero = 0;
+    for (const p of YRS) {
+      const gen = generateAll(structuredClone(base), p, pl5);
+      for (const co of base.companies.map((c) => c.code)) {
+        const y = rollupMonthly(mo.get(co), [p])[0];
+        const ws = worksheet(gen, base.companies, pl5, {}, p, { company: co });
+        const pl = -ws.filter((r) => r.type === 'PL' && !['TAX_ADJ', 'NCI_PL'].includes(r.acc)).reduce((a, r) => a + r.ind + r.con, 0);
+        assert.equal(y?.plImpact || 0, pl || 0, `${p5} ${p.label} ${co}`);
+        if (pl) nonzero++;
+      }
+    }
+    assert.ok(nonzero > 5, '比較した値が0ばかりではない');
+  }
 });

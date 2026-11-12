@@ -19,6 +19,8 @@ import { fmt, indexToJp } from '../../engine/util.js';
 
 export function renderWorksheet(ctx) {
   const { gen, companies, pol, names, period, unit } = ctx;
+  // 会社マスタで削除・コード変更された会社が選んだままになっていたら、すべての会社に戻す
+  if (view.company !== 'all' && view.company !== 'CONSOL' && !companies.some((c) => c.code === view.company)) view.company = 'all';
   const ws = worksheet(gen, companies, pol, names, period, { company: view.company === 'all' ? null : view.company });
   const coLabel = view.company === 'all' ? '全社' : view.company === 'CONSOL' ? '連結（会社に属さない組替）' : `${view.company} ${companies.find((c) => c.code === view.company)?.name || ''}`;
   const COLN = { lessee: '借手個別', lessor: '貸手個別', ind: '個社修正', con: '連結修正' };
@@ -131,7 +133,8 @@ export function renderWorksheet(ctx) {
       h('h3', null, '貸借対照表'), table(cols, bs, { className: 'ws-table' }),
       h('h3', null, '損益計算書'), table(cols, pl, { className: 'ws-table' })),
     card(null, waterfall({ wide: true, title: '損益のブリッジ：単純合算 → 連結（税引前）→ 税引後 → 親会社株主帰属（グループ内リース関連）', subtitle: '各棒にカーソルを合わせると内容を表示。連結（税引前）に残るのは主に貸手資産の減価償却費（組替後）', steps, unit })),
-    card('連結キャッシュ・フロー計算書の消去データ', table([
+    // CFの消去は借手の支払と貸手の受取の組で相殺するため、会社を選んでいても全社の額を表示する
+    card(view.company === 'all' ? '連結キャッシュ・フロー計算書の消去データ' : '連結キャッシュ・フロー計算書の消去データ（全社：会社の選択によらず全社の額）', table([
       { label: '項目', key: 'label' }, { label: '区分', key: 'section' }, { label: '個別計上額', key: 'amount', num: true, calc: cfInfo }, { label: '消去額', key: 'elim', num: true, calc: cfInfo },
     ], cf.items, { className: 'ws-table' }), h('div', { class: 'alert alert-info' }, `借手の支払と貸手の受取は連結上相殺されます（差額 ${fmt(cf.check)}）。利息の支払額の区分は会計方針 POL-09 に従います。`)),
     rollCard,
@@ -308,8 +311,9 @@ function renderProofs(ctx) {
 function renderNotes(ctx) {
   const { gen, companies, pol, period, unit, data } = ctx;
   const pk = notePeriodKey(period);
-  const g = groupNoteAmounts(gen, period, pol);
+  const g = groupNoteAmounts(gen, period, pol, companies);
   const inputs = data.noteInputs?.[pk] || {};
+  if (noteView.co !== 'all' && !companies.some((c) => c.code === noteView.co)) noteView.co = 'all';
   const rows = consolidatedNotes(g, inputs);
   const coName = (code) => companies.find((c) => c.code === code)?.name || code;
   const collected = Object.keys(inputs).length;
@@ -399,15 +403,22 @@ function renderNotes(ctx) {
     const st = companies.map((c) => {
       const m = inputs[c.code] || {};
       const filled = Object.values(m).filter((x) => x && (x.total !== null || x.group !== null || x.memo)).length;
-      return { code: c.code, name: c.name, filled, involved: involved.has(c.code), state: filled === 0 ? '未提出' : '提出済み' };
+      // 記入が必要な項目：この会社にグループ内リース分がある行（個別の注記額にグループ内の分が含まれるため、各社の注記額の記入が必要）
+      const req = [...g].filter(([, v]) => v.rows.some((x) => x.co === c.code)).map(([k]) => k);
+      const reqFilled = req.filter((k) => m[k] && m[k].total !== null && m[k].total !== undefined);
+      const state = filled === 0 ? '未提出' : reqFilled.length < req.length ? '一部記入' : '提出済み';
+      return { code: c.code, name: c.name, filled, req: req.length, reqFilled: reqFilled.length, missing: req.filter((k) => !reqFilled.includes(k)), involved: involved.has(c.code), state };
     });
-    return h('details', { class: 'basis', open: st.some((x) => x.involved && x.filled === 0) && collected > 0 },
-      h('summary', null, `各社の提出状況（提出済み ${st.filter((x) => x.filled).length}社／${companies.length}社）`),
+    const label = (k) => { const r = noteRows().find((x) => x.key === k); return r ? `${r.item.title}${r.sub ? `（${r.sub}）` : ''}` : k; };
+    return h('details', { class: 'basis', open: st.some((x) => x.involved && x.state !== '提出済み') && collected > 0 },
+      h('summary', null, `各社の提出状況（提出済み ${st.filter((x) => x.state === '提出済み').length}社・一部記入 ${st.filter((x) => x.state === '一部記入').length}社／${companies.length}社）`),
       table([
         { label: '会社', render: (x) => h('td', null, `${x.code} ${x.name}`) },
         { label: 'グループ内リース', render: (x) => h('td', null, x.involved ? 'あり' : 'なし') },
-        { label: '状態', render: (x) => h('td', null, x.filled ? statusBadge('ok', '提出済み') : x.involved ? statusBadge('ng', '未提出') : h('span', { class: 'muted' }, '未提出')) },
-        { label: '記入済みの項目', render: (x) => h('td', { class: 'num' }, `${x.filled}／${nRows}`) },
+        { label: '状態', render: (x) => h('td', null, x.state === '提出済み' ? statusBadge('ok', '提出済み') : x.state === '一部記入' ? statusBadge('warn', '一部記入') : x.involved ? statusBadge('ng', '未提出') : h('span', { class: 'muted' }, '未提出')) },
+        { label: '記入が必要な項目（グループ内リース分のある行）', render: (x) => h('td', { class: 'num', title: x.missing.length ? `未記入：${x.missing.map(label).join('、')}` : '' }, x.req ? `${x.reqFilled}／${x.req}` : '－') },
+        { label: '未記入の必要な項目', render: (x) => h('td', { class: 'small', title: x.filled && x.missing.length > 5 ? x.missing.map(label).join('、') : '' }, x.filled && x.missing.length ? `${x.missing.slice(0, 5).map(label).join('、')}${x.missing.length > 5 ? ` ほか${x.missing.length - 5}項目` : ''}` : '') },
+        { label: '記入済みの項目（全体）', render: (x) => h('td', { class: 'num' }, `${x.filled}／${nRows}`) },
       ], st, { className: 'compact' }));
   };
   return card('注記（新リース会計基準）',

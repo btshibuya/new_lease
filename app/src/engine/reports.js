@@ -2,6 +2,7 @@
 import { accountLabel, ACCOUNTS, metaOf } from './accounts.js';
 import { round } from './util.js';
 import { phaseAtIndex, lessorDepBetween } from './schedule.js';
+import { monthReversals } from './elimination.js';
 
 /**
  * 個別財務諸表上のグループ内リース関連残高（アプリの計算値）。借方＋。
@@ -270,14 +271,15 @@ export function contractMonthly(sched, pol) {
 
 /** 月次の行を期間（年度など）ごとにまとめる。残高は期末、フローは合計 */
 export function rollupMonthly(rows, periods) {
-  const FLOW = ['pay', 'prePay', 'int', 'principal', 'dep', 'other', 'lesseeExp', 'inc', 'plEffect'];
+  const FLOW = ['pay', 'prePay', 'int', 'principal', 'dep', 'other', 'lesseeExp', 'inc', 'plEffect', 'eChange', 'plImpact'];
   return periods.map((p) => {
     const inP = rows.filter((r) => r.m >= p.start && r.m <= p.end);
     if (!inP.length) return null;
     const last = inP[inP.length - 1];
     const o = { ...last, label: p.label, start: p.start, end: p.end };
-    for (const f of FLOW) o[f] = inP.reduce((a, r) => a + r[f], 0);
-    o.event = inP.filter((r) => r.event).map((r) => r.event).filter((e, i, arr) => arr.indexOf(e) === i).join('・');
+    for (const f of FLOW) if (f in last) o[f] = inP.reduce((a, r) => a + (r[f] || 0), 0);
+    // イベントは「・」で分けてから重複を除く（同じイベントが月ごとに繰り返し並ばないように）
+    o.event = [...new Set(inP.flatMap((r) => (r.event ? r.event.split('・') : [])))].join('・');
     o.months = inP; // 年度の行から月ごとの内訳へドリルダウンするため
     return o;
   }).filter(Boolean);
@@ -285,7 +287,8 @@ export function rollupMonthly(rows, periods) {
 
 /**
  * 会社別の集計：その会社が借手の契約（返済・利息・償却・資産・負債・費用）と、貸手の契約（受取リース料・未収）を月ごとに合計する。
- * 会社の純資産修正額（消去差額のうちこの会社の分）と、その増減（この会社の連結損益への影響）も求める。
+ * 会社の純資産修正額（消去差額のうちこの会社の分）とその増減（eChange：会社をまたぐ現金の受払の消去を含む）、
+ * この会社の連結損益への影響（plImpact：この会社の損益の行の消去・組替、税引前）も求める。
  * 各行の parts に契約ごとの金額を残す（ドリルダウン用）。
  * @param items [{ contract, sched }]
  */
@@ -295,7 +298,8 @@ export function companyMonthly(items, code, pol) {
   const mine = items.filter(({ contract: c }) => c.lesseeCo === code || c.lessorCo === code);
   if (!mine.length) return [];
   const rows = new Map();
-  const blank = (m) => ({ m, pay: 0, prePay: 0, principal: 0, int: 0, dep: 0, other: 0, lesseeExp: 0, L: 0, X: 0, rou: 0, liabs: 0, assets: 0, equity: 0, inc: 0, R: 0, cumE: 0, plEffect: 0, event: '', parts: [] });
+  const blank = (m) => ({ m, pay: 0, prePay: 0, principal: 0, int: 0, dep: 0, other: 0, lesseeExp: 0, L: 0, X: 0, rou: 0, liabs: 0, assets: 0, equity: 0, inc: 0, R: 0, cumE: 0, eChange: 0, plImpact: 0, event: '', parts: [] });
+  const R = (v) => round(v, pol['POL-11'] || 'half_up');
   let lo = Infinity, hi = -Infinity;
   for (const { contract: c, sched } of mine) {
     const mo = contractMonthly(sched, pol);
@@ -304,12 +308,21 @@ export function companyMonthly(items, code, pol) {
       lo = Math.min(lo, r.m); hi = Math.max(hi, r.m);
       const row = rows.get(r.m) || rows.set(r.m, blank(r.m)).get(r.m);
       const part = { contract: c.id, role: isL && isR ? '借手・貸手' : isL ? '借手' : '貸手', eventText: r.event };
-      if (isL) for (const k of LESSEE) { row[k] += r[k]; part[k] = r[k]; }
+      if (isL) { for (const k of LESSEE) { row[k] += r[k]; part[k] = r[k]; } part.assets = r.rou; }
       if (isR) for (const k of LESSOR) { row[k] += r[k]; part[k] = r[k]; }
+      // この会社の連結損益への影響（税引前）：その月の個別仕訳の取消のうち、この会社の損益の行（借方＋は利益の減少）
+      const rec = sched.byIndex(r.m);
+      let pl = 0;
+      for (const rv of rec ? monthReversals(rec, sched, pol) : []) for (const l of rv.lines) if (l.co === code && ACCOUNTS[l.acc]?.type === 'PL') pl -= l.amt;
+      // 貸手の減価償却費の組替（C-12）：貸手の会社の賃貸原価等を取り消し、連結（会社に属さない）の費用に組み替える
+      if (isR && pol['POL-05'] === 'by_lessee_dept' && (c.lessor?.assetCost || 0) > 0) pl += lessorDepBetween(sched, r.m, r.m, c.lessor.ratio ?? 1, R);
+      pl = pl || 0; // −0 を 0 にそろえる
+      row.plImpact += pl; part.plImpact = pl;
       const e = eFromSchedule(sched, r.m, pol)[code] || 0;
       row.cumE += e; part.cumE = e;
       row.parts.push(part);
-      if (r.event) row.event = [...new Set([...(row.event ? row.event.split('・') : []), `${c.id} ${r.event}`])].join('・');
+      // イベントは「契約番号 イベント」の形で1件ずつ並べる（同じ月に複数のイベントがあっても契約番号が分かるように）
+      if (r.event) row.event = [...new Set([...(row.event ? row.event.split('・') : []), ...r.event.split('・').map((e) => `${c.id} ${e}`)])].join('・');
     }
   }
   const out = [];
@@ -318,7 +331,7 @@ export function companyMonthly(items, code, pol) {
     const row = rows.get(m) || blank(m);
     row.assets = row.rou;
     row.equity = row.rou - row.liabs;
-    row.plEffect = row.cumE - prev;
+    row.eChange = row.cumE - prev; // 純資産修正額の増減（会社をまたぐ現金の受払の消去を含むため、会社の損益への影響とは一致しない）
     prev = row.cumE;
     out.push(row);
   }

@@ -78,9 +78,12 @@ export function journalCard(j, ctx, opts = {}) {
   const tot = dr.reduce((a, l) => a + l.amt, 0);
   const totC = -cr.reduce((a, l) => a + l.amt, 0);
   const balanced = tot === totC;
+  // j.partial：会社で抽出した仕訳（その会社の行だけ）。相手の行が別の会社・連結にあるため、貸借が一致しないのは誤りではない
+  const balText = balanced ? '貸借一致' : j.partial ? '会社の行のみ' : '貸借不一致';
+  const balBadge = balanced ? statusBadge('ok', balText) : j.partial ? h('span', { class: 'badge', title: '相手の行は別の会社（または会社に属さない連結の組替）にあります。仕訳全体では貸借が一致します' }, balText) : statusBadge('ng', balText);
   const tbl = h('div', { class: 'tbl-wrap' }, h('table', { class: 'tbl journal' },
     h('thead', null, h('tr', null, h('th', null, '借方科目'), h('th', null, '金額'), h('th', null, '貸方科目'), h('th', null, '金額'))),
-    h('tbody', null, rows, h('tr', { class: 'total' }, h('td', null, '合計'), amt(tot), h('td', null, balanced ? statusBadge('ok', '貸借一致') : statusBadge('ng', '貸借不一致')), amt(totC)))));
+    h('tbody', null, rows, h('tr', { class: 'total' }, h('td', null, '合計'), amt(tot), h('td', null, balBadge), amt(totC)))));
   // スマホ用：1行に1科目（科目｜借方｜貸方）。会社は会社コードで短く表示する
   const mRows = [...dr, ...cr].map((l) => h('tr', { class: opts.hl && opts.hl(l) ? 'q-hit-row' : '' },
     h('td', null, accountLabel(l, pol, names), h('span', { class: 'co' }, l.co === 'CONSOL' ? '連結' : l.co)),
@@ -88,7 +91,7 @@ export function journalCard(j, ctx, opts = {}) {
     l.amt < 0 ? amt(-l.amt, { calc: opts.noBasis ? null : info(l) }) : h('td')));
   const tblM = h('div', { class: 'tbl-wrap journal-m-wrap' }, h('table', { class: 'tbl journal-m' },
     h('thead', null, h('tr', null, h('th', null, '科目（会社）'), h('th', null, '借方'), h('th', null, '貸方'))),
-    h('tbody', null, mRows, h('tr', { class: 'total' }, h('td', null, balanced ? '合計（貸借一致）' : '合計（貸借不一致）'), amt(tot), amt(totC)))));
+    h('tbody', null, mRows, h('tr', { class: 'total' }, h('td', null, `合計（${balText}）`), amt(tot), amt(totC)))));
   const basis = h('details', { class: 'basis' }, h('summary', null, 'この仕訳の根拠をすべて表示（金額を押すと右の「計算の確認」でも見られます）'),
     h('ul', { class: 'basis-list' }, j.lines.map((l) => h('li', null, h('strong', null, `${accountLabel(l, pol, names)}（${coName(l.co, companies)}）${l.amt > 0 ? '借方' : '貸方'} ${fmt(Math.abs(l.amt))}`), l.bases && l.bases.length ? h('ul', null, l.bases.slice(0, 6).map((b) => h('li', null, b)), l.bases.length > 6 ? h('li', null, `ほか ${l.bases.length - 6} 件`) : null) : null))),
     j.details && j.details.length ? h('div', null, h('div', { class: 'sub-title' }, `月次の明細（${j.details.length}件：個別仕訳の取消）`),

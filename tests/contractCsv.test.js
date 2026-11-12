@@ -82,7 +82,7 @@ test('注記：キャッシュ・アウトフロー＝連結CFの消去額、使
   for (const gran of ['year', 'quarter']) {
     for (const p of buildPeriods(ymToIndex('2027-04'), ymToIndex('2033-03'), 3, gran).slice(0, gran === 'year' ? 6 : 8)) {
       const gen = generateAll(data, p, pol);
-      const g = groupNoteAmounts(gen, p, pol);
+      const g = groupNoteAmounts(gen, p, pol, data.companies);
       const sum = (prefix) => [...g.entries()].filter(([k]) => k === prefix || k.startsWith(`${prefix}.`)).reduce((a, [, v]) => a + v.amount, 0);
       const cf = cashFlowEliminations(gen, pol, p);
       assert.equal(sum('L-CASH'), cf.totals.receipts + cf.totals.penalty, `${p.label} キャッシュ・アウトフロー`);
@@ -105,15 +105,15 @@ test('注記：短期リースに係る費用は「短期リース」の契約�
   const k3 = d2.contracts.find((c) => c.id === 'K-003');
   assert.equal(k3.lessee.model, 'offbalance');
   const p = FY[0];
-  const a = groupNoteAmounts(generateAll(d2, p, pol), p, pol).get('L-SHORT').amount;
+  const a = groupNoteAmounts(generateAll(d2, p, pol), p, pol, d2.companies).get('L-SHORT').amount;
   assert.ok(a > 0);
   k3.lessee.offKind = 'low';
-  assert.equal(groupNoteAmounts(generateAll(d2, p, pol), p, pol).get('L-SHORT').amount, 0);
+  assert.equal(groupNoteAmounts(generateAll(d2, p, pol), p, pol, d2.companies).get('L-SHORT').amount, 0);
 });
 
 test('注記：収集表を書き出し、記入して読み込むと、連結の注記額＝各社の合計−グループ内リース分', () => {
   const p = FY[0];
-  const g = groupNoteAmounts(generateAll(data, p, pol), p, pol);
+  const g = groupNoteAmounts(generateAll(data, p, pol), p, pol, data.companies);
   const csv = noteCollectionCsv(data.companies, p, g);
   const rows = parseCsv(csv);
   assert.equal(rows.length, 1 + data.companies.length * noteRows().length);
@@ -148,7 +148,7 @@ test('注記：収集表を書き出し、記入して読み込むと、連結�
 
 test('注記：収集表の誤り（別の期間・未登録の会社・数値でない値）を行番号つきで報告する', () => {
   const p = FY[0];
-  const H = parseCsv(noteCollectionCsv(data.companies.slice(0, 1), p, groupNoteAmounts(generateAll(data, p, pol), p, pol)))[0];
+  const H = parseCsv(noteCollectionCsv(data.companies.slice(0, 1), p, groupNoteAmounts(generateAll(data, p, pol), p, pol, data.companies)))[0];
   const row = (o) => H.map((h) => o[h] ?? '').join(',');
   const text = [H.join(','), row({ 決算期末: '2029-03', 会社コード: 'P', 項目キー: 'L-VAR', '各社の注記額（記入）': '1' }), row({ 決算期末: '2028-03', 会社コード: 'ZZ', 項目キー: 'L-VAR', '各社の注記額（記入）': '1' }), row({ 決算期末: '2028-03', 会社コード: 'P', 項目キー: 'L-VAR', '各社の注記額（記入）': 'abc' })].join('\n');
   const r = importNoteCollection(text, data.companies, p);
@@ -158,15 +158,19 @@ test('注記：収集表の誤り（別の期間・未登録の会社・数値�
   assert.match(r.errors[2], /^4行目/);
 });
 
-test('注記：リース負債が含まれる科目と金額（流動＋固定）＝精算表の借手のリース負債、リース負債に係る利息費用＝精算表の利息費用（日本基準の契約）', () => {
+test('注記：リース負債が含まれる科目と金額（流動＋固定）＝精算表の借手の個別のリース負債（流動区分なしの会社は全額を固定）', () => {
+  const noSplit = data.companies.filter((c) => c.splitsCurrent === false).map((c) => c.code);
+  assert.ok(noSplit.length && data.contracts.some((c) => noSplit.includes(c.lesseeCo)), 'サンプルに流動区分なしの借手がある');
   for (const p of FY.slice(0, 4)) {
     const gen = generateAll(data, p, pol);
-    const g = groupNoteAmounts(gen, p, pol);
+    const g = groupNoteAmounts(gen, p, pol, data.companies);
     const ws = worksheet(gen, data.companies, pol, {}, p);
-    const L = -ws.filter((r) => ['LL_C', 'LL_NC', 'LEGACY_LIAB', 'LEGACY_LIAB_C'].includes(r.acc)).reduce((a, r) => a + r.lessee + r.ind, 0);
+    // 各社の個別の注記額と同じ基準（借手の個別の列）。連結の組替（流動区分なしの会社の流動部分）は含めない
+    const L = -ws.filter((r) => ['LL_C', 'LL_NC', 'LEGACY_LIAB', 'LEGACY_LIAB_C'].includes(r.acc)).reduce((a, r) => a + r.lessee, 0);
     assert.equal(g.get('L-LIAB.cur').amount + g.get('L-LIAB.nc').amount, L, `${p.label} リース負債`);
-    const cur = -ws.filter((r) => ['LL_C', 'LEGACY_LIAB_C'].includes(r.acc)).reduce((a, r) => a + r.lessee + r.ind, 0);
+    const cur = -ws.filter((r) => ['LL_C', 'LEGACY_LIAB_C'].includes(r.acc)).reduce((a, r) => a + r.lessee, 0);
     assert.equal(g.get('L-LIAB.cur').amount, cur, `${p.label} うち流動`);
+    assert.ok(!g.get('L-LIAB.cur').rows.some((x) => noSplit.includes(x.co)), `${p.label} 流動区分なしの会社は流動に含めない`);
   }
 });
 
