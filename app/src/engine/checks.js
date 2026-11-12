@@ -22,12 +22,36 @@ const NCI_TPLS = new Set(['C-01N', 'C-14', 'C-BN']);
 /** 税率・持分比率の時点値（エンジンの rateAt とは別実装：新しい履歴から逆順に探す） */
 function rateIndep(co, idx, key) {
   if (!co) return 0;
+  if (key === 'nciRatio' && co.ownership && co.ownership.length) {
+    // 持分比率の推移：異動ごとにみなし日を候補の月末から総当たりで選び（等距離は前）、その翌月から 1−親会社持分比率 を使う
+    const recs = co.ownership.map((r) => ({ r, from: deemedIndep(r, co.fyeMonth || 3) + 1 })).sort((a, b) => b.r.date.localeCompare(a.r.date));
+    for (const x of recs) if (x.from <= idx) return 1 - x.r.ratio;
+    return 1 - recs[recs.length - 1].r.ratio;
+  }
   const hist = [...(co.history || [])].reverse();
   for (const h of hist) {
     const y = Number(h.fromYm.slice(0, 4)), m = Number(h.fromYm.slice(5, 7));
     if ((y - 0) * 12 + (m - 1) <= idx) return h[key] || 0;
   }
   return co[key] || 0;
+}
+
+/** みなし日（エンジンの deemedMonthIdx とは別実装：前後13か月の月末を候補として日数の差が最小のものを選ぶ） */
+export function deemedIndep(r, fyeMonth) {
+  const base = new Date(`${r.date}T00:00:00Z`);
+  if (r.deemed === 'month' && r.effYm) return Number(r.effYm.slice(0, 4)) * 12 + Number(r.effYm.slice(5, 7)) - 2;
+  const every = { nearest_quarter_end: 3, nearest_fy_end: 12 }[r.deemed] || 1;
+  let best = null;
+  for (let k = -13; k <= 13; k++) {
+    const y = base.getUTCFullYear(), m = base.getUTCMonth() + k; // m：0起点（範囲外は Date が繰り上げる）
+    const end = new Date(Date.UTC(y, m + 1, 0));
+    const month = end.getUTCMonth() + 1;
+    if (every > 1 && ((month - fyeMonth) % every + every) % every !== 0) continue;
+    const diff = Math.abs(end - base);
+    const idx = end.getUTCFullYear() * 12 + end.getUTCMonth();
+    if (!best || diff < best.diff || (diff === best.diff && idx < best.idx)) best = { diff, idx };
+  }
+  return best.idx;
 }
 
 /** 契約条件（条件変更を含む）から直接、月ごとの支払額を求める（スケジュール計算とは別の実装） */
@@ -291,6 +315,38 @@ export function runChecks(data, period, pol, gen, names = {}, opts = {}) {
       if (m >= period.start - 0 && m <= period.end) rows.push({ contract: c.id, message: `返済スケジュールの手修正：${p.ym} の支払額を ${fmt(p.amount)} に修正（理由：${p.reason || '—'}）`, warn: true });
     }
     return item('CHK-18', '仕訳・返済スケジュールの手修正', rows.length ? WARN : OK, rows.length ? `${rows.length}件の手修正があります（契約情報の修正で解消できるか確認してください）` : '手修正はありません', rows, '手修正の記録');
+  });
+
+  safe('CHK-19', '持分比率の推移（異動日・みなし日）と支配獲得前の期間', () => {
+    const rows = [];
+    const jp = (i) => indexToJp(i);
+    for (const C of data.companies.filter((x) => (x.ownership || []).length)) {
+      const recs = [...C.ownership].sort((a, b) => a.date.localeCompare(b.date));
+      const tag = `${C.code} ${C.name}`;
+      if (recs[0].kind !== 'acquire') rows.push({ company: C.code, message: `${tag}：最初の異動（${recs[0].date}）が「取得（支配獲得）」ではありません。支配獲得日の記録から入力してください`, warn: true });
+      const seen = new Map();
+      recs.forEach((r, i) => {
+        const dm = deemedIndep(r, C.fyeMonth || 3);
+        const [y, m] = r.date.split('-').map(Number);
+        const gap = dm - (y * 12 + m - 1);
+        if (r.deemed === 'month' && !r.effYm) rows.push({ company: C.code, message: `${tag}：${r.date} の適用開始月が未入力です（前後いずれか近い月末をみなし日として計算しています）`, warn: true });
+        if (Math.abs(gap) > 6) rows.push({ company: C.code, message: `${tag}：${r.date} の異動に対し、みなし日（${jp(dm)}末）が6か月を超えて離れています。前後いずれかの決算日（四半期決算日を含む）をみなし日としているか確認してください`, warn: true });
+        if (seen.has(dm + 1)) rows.push({ company: C.code, message: `${tag}：${seen.get(dm + 1)} と ${r.date} の異動が同じ月（${jp(dm + 1)}）から適用されます。後の異動の比率だけを使い、前の異動による持分変動（資本剰余金）は計上されません`, warn: true });
+        seen.set(dm + 1, r.date);
+        const prev = recs[i - 1];
+        if (prev && r.kind === 'add' && r.ratio <= prev.ratio) rows.push({ company: C.code, message: `${tag}：${r.date} は「追加取得」ですが、親会社持分比率が増えていません（${(prev.ratio * 100).toFixed(2)}% → ${(r.ratio * 100).toFixed(2)}%）`, warn: true });
+        if (prev && r.kind === 'sell' && r.ratio >= prev.ratio) rows.push({ company: C.code, message: `${tag}：${r.date} は「一部売却」ですが、親会社持分比率が減っていません（${(prev.ratio * 100).toFixed(2)}% → ${(r.ratio * 100).toFixed(2)}%）`, warn: true });
+        if (r.ratio <= 0.5) rows.push({ company: C.code, message: `${tag}：${r.date} 以後の親会社持分比率が ${(r.ratio * 100).toFixed(2)}% です。支配が継続しているか（実質支配基準）を確認してください。支配を喪失した場合、その後の取引はグループ内取引ではありません`, warn: true });
+      });
+      if ((C.history || []).some((h) => h.nciRatio !== C.nciRatio)) rows.push({ company: C.code, message: `${tag}：持分比率の推移を入力しているため、「税率・非支配株主持分比率の履歴」の持分比率は使っていません（税率の履歴は使います）`, warn: true });
+      // 支配獲得（最初の取得のみなし日の翌月）より前の期間にも消去を行っている契約
+      const acqFrom = deemedIndep(recs[0], C.fyeMonth || 3) + 1;
+      for (const r of gen.results.filter((x) => x.contract.lesseeCo === C.code || x.contract.lessorCo === C.code)) {
+        const first = r.sched.meta.firstIdx;
+        if (first < acqFrom) rows.push({ contract: r.contract.id, company: C.code, message: `${tag} の支配獲得（${jp(acqFrom)}から連結）より前の ${jp(first)} から消去を行っています。支配獲得前の取引はグループ内取引ではないため、支配獲得日の残高は資本連結（取得時の既存の関係）で処理しているか確認してください`, warn: true });
+      }
+    }
+    return item('CHK-19', '持分比率の推移（異動日・みなし日）と支配獲得前の期間', rows.length ? WARN : OK, rows.length ? `${rows.length}件の確認事項` : (data.companies.some((x) => (x.ownership || []).length) ? '異動の記録・みなし日・支配獲得日に確認事項はありません' : '持分比率の推移の入力はありません（履歴の持分比率を使います）'), rows, '入力の確認（みなし日は別実装で計算）');
   });
 
   safe('CHK-04', '消去の完全性（連結後のグループ内残高・取引が0）', () => {
@@ -658,7 +714,7 @@ export function runChecks(data, period, pol, gen, names = {}, opts = {}) {
     return item('CHK-13', '確定済み期間の再現性（確定時のスナップショットと現在の再計算の一致）', ng.length ? NG : lk.length ? WARN : OK, ng.length ? `確定済み期間の数値・表示科目が ${ng.length}件変わっています。変更を取り消すか、理由を記録して確定を解除してください` : lk.length ? '数値は一致していますが、確定時から会計方針が変更されています' : (data.locks || []).length ? `確定済み ${(data.locks || []).length} 期間すべてで再計算結果が確定時と一致` : '確定済みの期間はありません', lk, '確定値との比較');
   });
 
-  const order = ['CHK-00', 'CHK-18', 'CHK-01', 'CHK-02', 'CHK-03', 'CHK-04', 'CHK-05', 'CHK-06', 'CHK-07', 'CHK-17', 'CHK-08', 'CHK-09', 'CHK-10', 'CHK-11', 'CHK-14', 'CHK-15', 'CHK-16', 'CHK-12', 'CHK-13'];
+  const order = ['CHK-00', 'CHK-18', 'CHK-01', 'CHK-02', 'CHK-03', 'CHK-04', 'CHK-05', 'CHK-06', 'CHK-07', 'CHK-17', 'CHK-08', 'CHK-09', 'CHK-10', 'CHK-11', 'CHK-19', 'CHK-14', 'CHK-15', 'CHK-16', 'CHK-12', 'CHK-13'];
   return out.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
 }
 

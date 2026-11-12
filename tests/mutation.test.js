@@ -10,6 +10,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'app', 'src', 'engine');
 
 const MUTATIONS = [
+  ['新しい持分比率をみなし日の翌月でなく当月から使う', 'accounts.js', 'return { rec: r, deemedIdx: dm, fromIdx: dm + 1,', 'return { rec: r, deemedIdx: dm, fromIdx: dm,'],
+  ['みなし日が等距離のとき後の日にする', 'accounts.js', 'return day - monthEndDay(prev) <= monthEndDay(next) - day ? prev : next;', 'return day - monthEndDay(prev) < monthEndDay(next) - day ? prev : next;'],
+  ['持分比率の推移を無視して基準の比率を使う', 'accounts.js', "if (key === 'nciRatio' && co.ownership && co.ownership.length) {", "if (false) {"],
+  ['四半期末みなしで子会社の決算月を無視する', 'accounts.js', 'const fy0 = (fyeMonth - 1) % 12;', 'const fy0 = 0;'],
   ['非支配株主持分の符号を逆にする', 'elimination.js', "return { N: R(rateAt(L, idx, 'nciRatio') * baseAt(idx)), cap };", "return { N: -R(rateAt(L, idx, 'nciRatio') * baseAt(idx)), cap };"],
   ['税効果に貸手の税率を使う', 'elimination.js', 'res.DTc[co] = taxOf(C, res.Eclose[co], closeIdx, pol, R);', 'res.DTc[co] = taxOf(coMap[c.lessorCo], res.Eclose[co], closeIdx, pol, R);'],
   ['税効果を期間損益で計算する', 'elimination.js', 'res.DTc[co] = taxOf(C, res.Eclose[co], closeIdx, pol, R);', 'res.DTc[co] = taxOf(C, res.Eclose[co] - res.Eopen[co], closeIdx, pol, R);'],
@@ -58,6 +62,11 @@ async function ngIds(dir) {
   d.contracts.push({ ...JSON.parse(JSON.stringify(d.contracts[3])), id: 'K-905', modifications: [{ ym: '2028-08', payment: 360, termMonths: 60, rate: 0.05 }], lessor: { ...d.contracts[3].lessor, assetId: 'A-13' }, actuals: {} });
   // フリーレント中に条件変更（貸手の未収が残った状態で新たなリースとして扱う）
   d.contracts.push({ ...JSON.parse(JSON.stringify(d.contracts[1])), id: 'K-902', lesseeCo: 'S4', freePayments: 4, steps: [], modifications: [{ ym: '2027-07', payment: 60, termMonths: 36, rate: 0.03 }], lessee: { ...d.contracts[1].lessee, idc: 0 }, lessor: { ...d.contracts[1].lessor, assetId: 'A-10', ratio: 1 }, actuals: {} });
+  // 持分比率の推移（異動日・みなし日）がある会社：期中の追加取得（等距離の日付）、四半期末みなしの一部売却
+  d.companies.push({ code: 'S6', name: 'S6', fyeMonth: 3, taxRate: 0.3, nciRatio: 0, taxEffect: true, adoption: { method: 'cumulative', ym: '2027-04' }, ownership: [
+    { date: '2027-04-01', ratio: 0.8, kind: 'acquire', deemed: 'nearest_month_end' }, { date: '2027-09-15', ratio: 0.9, kind: 'add', deemed: 'nearest_month_end' },
+    { date: '2028-11-15', ratio: 0.6, kind: 'sell', deemed: 'nearest_quarter_end' }] });
+  d.contracts.push({ ...JSON.parse(JSON.stringify(d.contracts[0])), id: 'K-906', lesseeCo: 'S6', frequencyMonths: 1, payment: 90, lessor: { ...d.contracts[0].lessor, assetId: 'A-14' }, actuals: {} });
   const periods = [...buildPeriods(ymToIndex('2027-04'), ymToIndex('2034-03'), 3), ...buildPeriods(ymToIndex('2027-04'), ymToIndex('2029-03'), 3, 'quarter')];
   const hit = new Set();
   for (const pol of [defaultPolicies(), { ...defaultPolicies(), 'POL-07': 'capitalize', 'POL-03': 'balance' }]) {

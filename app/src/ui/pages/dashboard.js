@@ -3,6 +3,7 @@ import { kpi, COLORS, SERIES } from '../components.js';
 import { network, barChart, lineChart } from '../charts.js';
 import { eFromSchedule } from '../../engine/reports.js';
 import { fmt } from '../../engine/util.js';
+import { rateAt } from '../../engine/accounts.js';
 
 export function renderDashboard(ctx) {
   const { gen, period, companies, checks, data, pol, yearPeriods } = ctx;
@@ -36,7 +37,10 @@ export function renderDashboard(ctx) {
   // 相関図
   const involved = new Set(data.contracts.flatMap((c) => [c.lessorCo, c.lesseeCo]));
   // 出資関係図の配置：親会社は常に表示し、グループ内リースのある子会社を下に並べる
-  const nodes = companies.filter((c) => c.isParent || involved.has(c.code)).map((c) => ({ id: c.code, label: `${c.code} ${c.name.replace(/[（(].*$/, '')}`.slice(0, 12), sub: `${c.isParent ? '親会社' : `親会社持分 ${+((1 - c.nciRatio) * 100).toFixed(1)}%`}・${c.fyeMonth}月決算`, parent: c.isParent, own: c.isParent ? undefined : 1 - c.nciRatio }));
+  // 親会社持分は期末時点の比率（持分比率の推移・履歴を反映）。期中に変わったときは期首→期末を表示する
+  const ownAt = (c, i) => 1 - rateAt(c, i, 'nciRatio');
+  const ownTxt = (c) => { const a = ownAt(c, period.start), z = ownAt(c, period.end); const f = (v) => `${+(v * 100).toFixed(1)}%`; return a === z ? f(z) : `${f(a)}→${f(z)}`; };
+  const nodes = companies.filter((c) => c.isParent || involved.has(c.code)).map((c) => ({ id: c.code, label: `${c.code} ${c.name.replace(/[（(].*$/, '')}`.slice(0, 12), sub: `${c.isParent ? '親会社' : `親会社持分 ${ownTxt(c)}`}・${c.fyeMonth}月決算`, parent: c.isParent, own: c.isParent ? undefined : ownAt(c, period.end) }));
   const pairs = new Map();
   for (const r of res) {
     const k = `${r.contract.lessorCo}>${r.contract.lesseeCo}`;

@@ -125,12 +125,70 @@ export function metaOf(c) {
  */
 export function rateAt(co, idx, key) {
   if (!co) return 0;
+  // 持分比率の推移（異動日つき）がある会社は、非支配株主持分比率をその推移から求める（履歴の持分比率より優先）
+  if (key === 'nciRatio' && co.ownership && co.ownership.length) {
+    const steps = ownershipSteps(co);
+    let v = steps[0].nci; // 最初の取得より前の月も、取得時の比率とみなす（支配獲得前の期間を含む契約は検算 CHK-19 で警告）
+    for (const s of steps) if (s.fromIdx <= idx) v = s.nci;
+    return v;
+  }
   let v = co[key] || 0;
   for (const h of co.history || []) {
     const [y, m] = h.fromYm.split('-').map(Number);
     if (y * 12 + m - 1 <= idx) v = h[key] || 0;
   }
   return v;
+}
+
+// ── 持分比率の推移（異動日・みなし日） ──
+export const DEEMED = {
+  nearest_month_end: '前後いずれか近い月末',
+  nearest_quarter_end: '前後いずれか近い四半期末（子会社の四半期決算日）',
+  nearest_fy_end: '前後いずれか近い決算日（子会社の決算日）',
+  month: '適用開始月を指定',
+};
+export const OWN_KINDS = { acquire: '取得（支配獲得）', add: '追加取得', sell: '一部売却', other: 'その他（増資・自己株式等）' };
+
+const dayNo = (y, m0, d) => Date.UTC(y, m0, d) / 86400000; // m0：0〜11
+const monthEndDay = (idx) => dayNo(Math.floor(idx / 12), idx % 12 + 1, 0); // 月インデックスの月末日の通日
+
+/**
+ * みなし日（月末）の月インデックス。新しい比率はその翌月から使う。
+ * 連結会計基準 注5：取得日・売却日が子会社の決算日以外のときは、前後いずれかの決算日（四半期決算日を含む）に行われたものとみなせる。
+ * 月次で計算するため「前後いずれか近い月末」が最も細かい。等距離のときは前の日とする。
+ * @param {{date:string, deemed?:string, effYm?:string}} rec 異動の記録
+ * @param {number} fyeMonth 子会社の決算月（1〜12）
+ */
+export function deemedMonthIdx(rec, fyeMonth = 3) {
+  const [y, m, d] = String(rec.date || '').split('-').map(Number);
+  const idx = y * 12 + m - 1;
+  const day = dayNo(y, m - 1, d);
+  if (rec.deemed === 'month' && /^\d{4}-\d{2}$/.test(rec.effYm || '')) {
+    const [ey, em] = rec.effYm.split('-').map(Number);
+    return ey * 12 + em - 2; // 指定の適用開始月の前月末をみなし日とする
+  }
+  const step = rec.deemed === 'nearest_quarter_end' ? 3 : rec.deemed === 'nearest_fy_end' ? 12 : 1;
+  const fy0 = (fyeMonth - 1) % 12; // 決算月（0〜11）
+  const isEnd = (i) => step === 1 || (((i % 12) - fy0) % step + step) % step === 0;
+  let prev = idx - 1; while (!isEnd(prev)) prev--;
+  if (isEnd(idx) && monthEndDay(idx) === day) return idx; // 異動日がみなし日の候補（月末・四半期末・決算日）そのもの
+  let next = idx; while (!isEnd(next)) next++;
+  return day - monthEndDay(prev) <= monthEndDay(next) - day ? prev : next;
+}
+
+/** 異動の記録を日付順に並べ、非支配株主持分比率（1−親会社持分比率）と適用開始月を付ける */
+export function ownershipSteps(co) {
+  return [...(co.ownership || [])].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)).map((r) => {
+    const dm = deemedMonthIdx(r, co.fyeMonth || 3);
+    return { rec: r, deemedIdx: dm, fromIdx: dm + 1, parent: r.ratio, nci: Math.round((1 - r.ratio) * 1e10) / 1e10 };
+  });
+}
+
+/** 非支配株主持分比率が変わりうる月（適用開始月）の一覧 */
+export function nciChangeMonths(co) {
+  if (!co) return [];
+  if (co.ownership && co.ownership.length) return ownershipSteps(co).map((s) => s.fromIdx);
+  return (co.history || []).map((h) => { const [y, m] = h.fromYm.split('-').map(Number); return y * 12 + m - 1; });
 }
 
 /** 連結損益計算書の区分（段階損益の比較用） */

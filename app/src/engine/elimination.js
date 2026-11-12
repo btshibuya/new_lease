@@ -2,7 +2,7 @@
 // 方針：連結修正は「個別で計上された仕訳を取り消す（逆仕訳）」ことで作成し、
 // 各明細に根拠（どの月の・どの個別仕訳の取消か、計算式）を持たせる。
 import { buildSchedule, currentPortion, periodSummary, lessorDepBetween } from './schedule.js';
-import { ACCOUNTS, accountLabel, metaOf, rateAt } from './accounts.js';
+import { ACCOUNTS, accountLabel, metaOf, rateAt, nciChangeMonths } from './accounts.js';
 import { eFromSchedule } from './reports.js';
 import { round, indexToJp, indexToYm, ymToIndex, fmt } from './util.js';
 
@@ -234,13 +234,8 @@ export function nciAt(sched, coMap, pol, idx) {
   if (pol['POL-01'] !== 'allocate') return { N: 0, cap: 0 };
   const R = (v) => round(v, pol['POL-11'] || 'half_up');
   const L = coMap[c.lesseeCo];
-  const baseAt = (t) => {
-    const e = eFromSchedule(sched, t, pol);
-    let b = 0;
-    for (const co of [c.lesseeCo, c.lessorCo]) b += (e[co] || 0) - taxOf(coMap[co], e[co] || 0, t, pol, R);
-    return b;
-  };
-  const changes = (L?.history || []).map((h) => ymToIndex(h.fromYm)).filter((t) => t <= idx).sort((a, b) => a - b);
+  const baseAt = (t) => nciBase(sched, coMap, pol, t, R);
+  const changes = [...new Set(nciChangeMonths(L))].filter((t) => t <= idx).sort((a, b) => a - b);
   let cap = 0;
   if (pol['POL-14'] !== 'capital') {
     for (const t of changes) {
@@ -257,6 +252,44 @@ export function nciAt(sched, coMap, pol, idx) {
     return { N: R(rateAt(L, idx, 'nciRatio') * baseAt(idx)) - ref, cap: 0, capRef: ref };
   }
   return { N: R(rateAt(L, idx, 'nciRatio') * baseAt(idx)), cap };
+}
+
+/** 非支配株主持分の按分の基礎（月末）：借手・貸手の純資産修正額の合計から税効果を控除した額 */
+export function nciBase(sched, coMap, pol, t, R) {
+  const c = sched.contract;
+  const e = eFromSchedule(sched, t, pol);
+  let b = 0;
+  for (const co of [...new Set([c.lesseeCo, c.lessorCo])]) b += (e[co] || 0) - taxOf(coMap[co], e[co] || 0, t, pol, R);
+  return b;
+}
+
+/**
+ * 期間内の非支配株主への按分の内訳：持分比率が同じ月の区間ごとに「基礎の増減 × 比率」。
+ * 区間の合計＝当期の非支配株主帰属額（適用時の累積的影響額分を除く）。比率が変わった月の「前月末の基礎 × 比率の差」は持分変動（資本剰余金）。
+ * @returns {{ segments: Array<{from:number,to:number,n:number,b0:number,b1:number,amt:number}>, changes: Array<{at:number,n0:number,n1:number,base:number,cap:number}> }}
+ */
+export function nciSegments(sched, coMap, pol, start, end) {
+  const c = sched.contract;
+  if (pol['POL-01'] !== 'allocate') return { segments: [], changes: [] };
+  const R = (v) => round(v, pol['POL-11'] || 'half_up');
+  const L = coMap[c.lesseeCo];
+  const base = (t) => nciBase(sched, coMap, pol, t, R);
+  const segments = [];
+  const changes = [];
+  let from = start;
+  for (let t = start; t <= end + 1; t++) {
+    const changed = t <= end && rateAt(L, t, 'nciRatio') !== rateAt(L, t - 1, 'nciRatio');
+    if (changed) {
+      const n0 = rateAt(L, t - 1, 'nciRatio'), n1 = rateAt(L, t, 'nciRatio'), b = base(t - 1);
+      changes.push({ at: t, n0, n1, base: b, cap: R(n1 * b) - R(n0 * b) });
+    }
+    if ((changed && t > start) || t === end + 1) {
+      const n = rateAt(L, from, 'nciRatio'), b0 = base(from - 1), b1 = base(t - 1);
+      segments.push({ from, to: t - 1, n, b0, b1, amt: R(n * b1) - R(n * b0) });
+      from = t;
+    }
+  }
+  return { segments, changes };
 }
 
 /** 会社別の個別税効果の取消額（純資産修正額×法定実効税率。繰延税金資産側は計上割合を反映） */
@@ -380,11 +413,15 @@ export function contractJournals(c, period, ctx) {
       nciLines.push(ln('NCI', co, -transN, meta, `${nm(co)} の非支配株主持分（適用時）`));
     }
     if (plPart) {
-      nciLines.push(ln('NCI_PL', co, plPart, meta, `当期の非支配株主帰属額＝期末 ${fmt(res.Nclose[co])} − 期首 ${fmt(res.Nopen[co])} − 持分変動 ${fmt(capPart)}（基礎＝借手・貸手の税効果後修正額の合計、比率＝借手 ${pct(res.nO[co])}→${pct(res.nC[co])}）`));
+      // 持分比率が期中に変わったときは、比率が同じ区間ごとの内訳を根拠に示す
+      const sg = nciSegments(sched, coMap, pol, period.start, period.end);
+      const segText = sg.segments.length > 1 || sg.changes.length ? `。区間ごと：${sg.segments.map((x) => `${indexToJp(x.from)}〜${indexToJp(x.to)} 基礎 ${fmt(x.b0)}→${fmt(x.b1)} × ${pct(x.n)} ＝ ${fmt(x.amt)}`).join('、')}${transN ? `、適用時の累積的影響額分 −${fmt(transN)}` : ''}` : '';
+      nciLines.push(ln('NCI_PL', co, plPart, meta, `当期の非支配株主帰属額＝期末 ${fmt(res.Nclose[co])} − 期首 ${fmt(res.Nopen[co])} − 持分変動 ${fmt(capPart)}（基礎＝借手・貸手の税効果後修正額の合計、比率＝借手 ${pct(res.nO[co])}→${pct(res.nC[co])}）${segText}`));
       nciLines.push(ln('NCI', co, -plPart, meta, `${nm(co)} の非支配株主持分`));
     }
     if (capPart) {
-      nciLines.push(ln('CAP_SURPLUS', co, capPart, meta, `持分比率の変動月の前月末の基礎額 × 比率の差 ＝ ${fmt(capPart)}（資本取引）`));
+      const chs = nciSegments(sched, coMap, pol, period.start, period.end).changes.filter((x) => x.cap);
+      nciLines.push(ln('CAP_SURPLUS', co, capPart, meta, `持分比率の変動月の前月末の基礎額 × 比率の差 ＝ ${fmt(capPart)}（資本取引）${chs.length ? `：${chs.map((x) => `${indexToJp(x.at - 1)}末 基礎 ${fmt(x.base)} × (${pct(x.n1)} − ${pct(x.n0)}) ＝ ${fmt(x.cap)}`).join('、')}` : ''}`));
       nciLines.push(ln('NCI', co, -capPart, meta, `${nm(co)} の非支配株主持分（持分変動）`));
     }
   }

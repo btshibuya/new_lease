@@ -60,6 +60,21 @@ function sanitizeHistory(h, base) {
   return out;
 }
 
+/** 持分比率の推移（異動日・異動後の親会社持分比率・種類・みなし日） */
+function sanitizeOwnership(o) {
+  if (!Array.isArray(o)) return [];
+  const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+  const okDate = (v) => { const m = DATE.exec(String(v || '')); if (!m) return null; const [y, mo, d] = [+m[1], +m[2], +m[3]]; const t = new Date(Date.UTC(y, mo - 1, d)); return y >= 1900 && y <= 2200 && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d ? String(v) : null; };
+  return o.slice(0, 100).filter((x) => x && typeof x === 'object' && okDate(x.date)).map((x) => ({
+    date: okDate(x.date),
+    ratio: num(x.ratio, 1, { min: 0, max: 1 }),
+    kind: oneOf(x.kind, ['acquire', 'add', 'sell', 'other'], 'other'),
+    deemed: oneOf(x.deemed, ['nearest_month_end', 'nearest_quarter_end', 'nearest_fy_end', 'month'], 'nearest_month_end'),
+    effYm: ym(x.effYm) || null,
+    memo: str(x.memo, 200),
+  })).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}
+
 export function sanitizeCompany(c) {
   const taxRate = num(c.taxRate, 0, { min: 0, max: 0.99 });
   const nciRatio = num(c.nciRatio, 0, { min: 0, max: 1 });
@@ -79,6 +94,7 @@ export function sanitizeCompany(c) {
     // 適用初年度の設定がない旧版のデータは、旧版と同じ結果になる「リース開始時から測定」（完全遡及）で読み込む
     adoption: { method: oneOf(ad.method, ['cumulative', 'retrospective', 'applied'], c.adoption ? 'cumulative' : 'retrospective'), ym: ym(ad.ym) || '2027-04' },
     history: sanitizeHistory(c.history, { taxRate, nciRatio }),
+    ownership: sanitizeOwnership(c.ownership),
   };
 }
 

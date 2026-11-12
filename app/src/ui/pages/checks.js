@@ -50,7 +50,14 @@ export function renderChecks(ctx) {
       h('p', null, c.detail),
       c.id === 'CHK-12' && c.rows.length ? noteInput('CHK-12') : null,
       c.rows.length ? h('details', { open: c.status === 'ng' }, h('summary', null, `明細（${c.rows.length}件）`),
-        table([{ label: '判定', render: (r) => h('td', null, r.ok ? statusBadge('ok') : r.warn ? statusBadge('warn') : c.status === 'ok' ? statusBadge('ok') : statusBadge(c.status)) }, { label: '契約', render: (r) => contractCell(r.contract, ctx) }, { label: '内容', key: 'message' }], c.rows, { className: 'compact' })) : null)));
+        table([{ label: '判定', render: (r) => h('td', null, r.ok ? statusBadge('ok') : r.warn ? statusBadge('warn') : c.status === 'ok' ? statusBadge('ok') : statusBadge(c.status)) }, { label: '契約', render: (r) => (r.contract || !r.company ? contractCell(r.contract, ctx) : companyCell(r.company, ctx)) }, { label: '内容', key: 'message' }], c.rows, { className: 'compact' })) : null)));
+}
+
+/** 検算の明細の会社コードから、会社マスタ（持分比率の推移）へ */
+function companyCell(code, ctx) {
+  const c = ctx.data.companies.find((x) => x.code === code);
+  if (!c) return h('td', { class: 'nw' }, code);
+  return h('td', { class: 'nw' }, h('button', { class: 'btn-link', type: 'button', title: '会社マスタの持分比率の推移へ', on: { click: () => goTo({ page: 'companies', target: `own-${c.code}` }) } }, `会社 ${c.code}`));
 }
 
 /** 検算の明細の契約番号から、関連する画面（契約の登録・月次レポート・仕訳帳）へ */

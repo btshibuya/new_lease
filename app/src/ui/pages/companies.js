@@ -1,7 +1,8 @@
 import { h, card, toast, ask } from '../dom.js';
 import { update, state, setUi } from '../store.js';
 import { sanitizeCompany, validCode } from '../../engine/data.js';
-import { deepClone } from '../../engine/util.js';
+import { deepClone, indexToJp, ymToIndex } from '../../engine/util.js';
+import { DEEMED, OWN_KINDS, ownershipSteps, deemedMonthIdx, rateAt } from '../../engine/accounts.js';
 
 export function renderCompanies(ctx) {
   const { data } = ctx;
@@ -18,7 +19,7 @@ export function renderCompanies(ctx) {
     h('td', null, h('input', { type: 'radio', name: 'parent', checked: c.isParent, 'aria-label': '親会社', on: { change: () => draft.forEach((x, k) => { x.isParent = k === i; }) } })),
     h('td', null, inp(c, 'fyeMonth', 'number', { min: 1, maxv: 12, label: '決算月' })),
     h('td', null, inp(c, 'taxRate', 'pct', { label: '法定実効税率' })),
-    h('td', null, inp(c, 'nciRatio', 'pct', { label: '非支配株主持分比率' })),
+    h('td', null, (c.ownership || []).length ? h('span', { class: 'muted small', title: '下の「持分比率の推移」から求めます' }, '持分比率の推移を使用') : inp(c, 'nciRatio', 'pct', { label: '非支配株主持分比率' })),
     h('td', null, inp(c, 'taxEffect', 'checkbox', { label: '個別で税効果を計上' })),
     h('td', null, inp(c, 'legacyAccounts', 'checkbox', { label: '旧科目名' })),
     h('td', null, inp(c, 'splitsCurrent', 'checkbox', { invert: true, label: '流動区分なし' })),
@@ -52,6 +53,7 @@ export function renderCompanies(ctx) {
         h('tbody', null, rows))),
       h('div', { class: 'actions' },
         h('button', { class: 'btn', type: 'button', on: { click: () => { state.dirty = null; update((d) => d.companies.push(sanitizeCompany({ code: `C${d.companies.length + 1}`, name: '新しい会社', fyeMonth: 3, taxRate: 0.3, adoption: { method: 'cumulative', ym: '2027-04' } })), '会社追加', ''); } } }, '＋ 会社を追加'))),
+    ownershipCard(data),
     historyCard(data),
     h('div', { class: 'save-bar' },
       h('button', { class: 'btn btn-primary', type: 'button', on: { click: save } }, '保存して再計算'),
@@ -85,6 +87,64 @@ function historyCard(data) {
         } } }, '履歴を保存')));
   });
   return card('税率・非支配株主持分比率の履歴（期別）',
+    data.companies.some((c) => (c.ownership || []).length) ? h('div', { class: 'alert alert-warn' }, `持分比率の推移を入力している会社（${data.companies.filter((c) => (c.ownership || []).length).map((c) => c.code).join('、')}）は、この履歴の非支配株主持分比率を使いません（税率の履歴は使います）。`) : null,
     h('div', { class: 'alert alert-info' }, '税率改正の場合は「改正税法の成立日を含む決算期の期首年月」を入力します（繰延税金は決算日までに成立した税率で計算するため。施行日ではありません）。持分の追加取得・売却の場合は、持分が変動した月を入力します。その月から新しい率を使います。過去の期間は当時の率で再計算されるため、開始仕訳は前期末の確定額と一致します。税率変更の影響は当期の法人税等調整額（C-13）、持分比率の変動は資本剰余金（C-14、資本取引）で処理します。'),
+    ...blocks);
+}
+
+const pctTxt = (v) => `${(v * 100).toFixed(2).replace(/\.?0+$/, '')}%`;
+
+/** 持分比率の推移：異動日（取得・追加取得・一部売却）と異動後の親会社持分比率。みなし日の翌月から新しい比率で非支配株主に按分する */
+function ownershipCard(data) {
+  const draft = deepClone(data.companies.filter((c) => !c.isParent).map((c) => ({ code: c.code, name: c.name, fyeMonth: c.fyeMonth, ownership: c.ownership || [] })));
+  const blocks = draft.map((c) => {
+    const body = h('tbody');
+    const summary = h('span', { class: 'muted small' });
+    const draw = () => {
+      const steps = ownershipSteps({ ownership: c.ownership.filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x.date || '')), fyeMonth: c.fyeMonth });
+      summary.textContent = steps.length ? `：${steps.map((x) => `${pctTxt(x.parent)}（非支配 ${pctTxt(x.nci)}、${indexToJp(x.fromIdx)}から）`).join(' → ')}` : '：未入力（会社マスタの非支配株主持分比率と履歴を使います）';
+      body.replaceChildren(...c.ownership.map((x, i) => {
+        const ok = /^\d{4}-\d{2}-\d{2}$/.test(x.date || '');
+        const dm = ok ? deemedMonthIdx(x, c.fyeMonth) : null;
+        const eff = h('td', { class: 'small nw' }, ok ? `${indexToJp(dm + 1)}から（みなし日 ${indexToJp(dm)}末）` : '異動日を入力');
+        const re = () => draw();
+        return h('tr', null,
+          h('td', null, h('input', { type: 'date', value: x.date || '', 'aria-label': '異動日', on: { change: (e) => { x.date = e.target.value; re(); } } })),
+          h('td', null, h('select', { 'aria-label': '異動の種類', on: { change: (e) => { x.kind = e.target.value; } } }, Object.entries(OWN_KINDS).map(([v, l]) => h('option', { value: v, selected: x.kind === v }, l)))),
+          h('td', null, h('input', { type: 'number', step: 'any', min: 0, max: 100, value: +((x.ratio ?? 1) * 100).toFixed(4), 'aria-label': '異動後の親会社持分比率（％）', on: { change: (e) => { x.ratio = Number(e.target.value) / 100; re(); } } })),
+          h('td', { class: 'num' }, pctTxt(1 - (x.ratio ?? 1))),
+          h('td', null, h('select', { 'aria-label': 'みなし日', on: { change: (e) => { x.deemed = e.target.value; re(); } } }, Object.entries(DEEMED).map(([v, l]) => h('option', { value: v, selected: (x.deemed || 'nearest_month_end') === v }, l))),
+            x.deemed === 'month' ? h('input', { type: 'month', value: x.effYm || '', 'aria-label': '適用開始月', on: { change: (e) => { x.effYm = e.target.value; re(); } } }) : null),
+          eff,
+          h('td', null, h('input', { type: 'text', value: x.memo || '', maxlength: 200, 'aria-label': '備考', on: { input: (e) => { x.memo = e.target.value; } } })),
+          h('td', null, h('button', { class: 'btn-link danger', type: 'button', on: { click: () => { c.ownership.splice(i, 1); draw(); } } }, '削除')));
+      }));
+    };
+    draw();
+    return h('details', { id: `own-${c.code}`, open: c.ownership.length > 0 }, h('summary', null, h('b', null, `${c.code} ${c.name}`), summary),
+      h('div', { class: 'tbl-wrap' }, h('table', { class: 'tbl compact form-table' }, h('thead', null, h('tr', null, ['異動日', '種類', '異動後の親会社持分比率（％）', '非支配株主持分比率', 'みなし日', '新しい比率を使う月', '備考', ''].map((t) => h('th', null, t)))), body)),
+      h('div', { class: 'actions' },
+        h('button', { class: 'btn', type: 'button', on: { click: () => { const last = c.ownership[c.ownership.length - 1]; c.ownership.push({ date: '', kind: c.ownership.length ? 'add' : 'acquire', ratio: last ? last.ratio : 1, deemed: 'nearest_month_end', memo: '' }); draw(); } } }, '＋ 異動を追加'),
+        h('button', { class: 'btn btn-primary', type: 'button', on: { click: () => {
+          if (c.ownership.some((x) => !/^\d{4}-\d{2}-\d{2}$/.test(x.date || ''))) return toast('異動日を入力してください', 'error');
+          if (c.ownership.some((x) => !(x.ratio >= 0 && x.ratio <= 1))) return toast('親会社持分比率は0〜100％で入力してください', 'error');
+          if (new Set(c.ownership.map((x) => x.date)).size !== c.ownership.length) return toast('同じ異動日が重複しています', 'error');
+          if (c.ownership.some((x) => x.deemed === 'month' && !/^\d{4}-\d{2}$/.test(x.effYm || ''))) return toast('みなし日を「適用開始月を指定」にした行は、適用開始月を入力してください', 'error');
+          // 確定済みの期間の比率が変わる場合は確認する（変わると CHK-13 が NG になる）
+          const orig = data.companies.find((x) => x.code === c.code);
+          const next = sanitizeCompany({ ...orig, ownership: c.ownership });
+          const firstDiff = (() => { for (let i = ymToIndex('2000-01'); i <= ymToIndex('2100-12'); i++) if (rateAt(orig, i, 'nciRatio') !== rateAt(next, i, 'nciRatio')) return i; return null; })();
+          const hitLocks = firstDiff === null ? [] : (data.locks || []).filter((l) => ymToIndex(l.periodEnd) >= firstDiff);
+          const doSave = () => {
+            state.dirty = null;
+            update((d) => { const t = d.companies.find((x) => x.code === c.code); t.ownership = next.ownership; }, '持分比率の推移の更新', `${c.code}：${c.ownership.map((x) => `${x.date} ${OWN_KINDS[x.kind] || ''} ${pctTxt(x.ratio)}（${DEEMED[x.deemed] || ''}）`).join('、') || 'なし'}`);
+            toast('保存しました');
+          };
+          if (!hitLocks.length) return doSave();
+          ask({ title: '確定済みの期間の持分比率が変わります', message: `${indexToJp(firstDiff)}以降の非支配株主持分比率が変わるため、確定済みの期間（${hitLocks.map((l) => l.label).join('、')}）の数値も変わります（検算 CHK-13 が NG になります）。保存しますか？`, okLabel: '保存する', danger: true }).then((ok) => { if (ok) doSave(); });
+        } } }, '推移を保存')));
+  });
+  return card('持分比率の推移（取得・追加取得・一部売却）',
+    h('div', { class: 'alert alert-info' }, '子会社株式の取得・追加取得・一部売却の日付と、異動後の親会社持分比率を入力します。非支配株主持分比率＝1−親会社持分比率です。取得日・売却日が子会社の決算日以外のときは、前後いずれかの決算日（四半期決算日を含む）に行われたものとみなして処理できます（連結財務諸表に関する会計基準 注5）。アプリは月次で計算するため、みなし日（月末）の翌月から新しい比率を使い、期中（年度・四半期・月次）に比率が変わった場合は、比率が同じ月ごとに非支配株主へ按分します。比率が変わった月の前月末の基礎額×比率の差は持分変動（資本剰余金）とします。'),
     ...blocks);
 }
