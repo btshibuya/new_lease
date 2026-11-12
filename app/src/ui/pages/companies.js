@@ -118,7 +118,7 @@ function ownershipCard(data) {
             x.deemed === 'month' ? h('input', { type: 'month', value: x.effYm || '', 'aria-label': '適用開始月', on: { change: (e) => { x.effYm = e.target.value; re(); } } }) : null),
           eff,
           h('td', null, h('input', { type: 'text', value: x.memo || '', maxlength: 200, 'aria-label': '備考', on: { input: (e) => { x.memo = e.target.value; } } })),
-          h('td', null, h('button', { class: 'btn-link danger', type: 'button', on: { click: () => { c.ownership.splice(i, 1); draw(); } } }, '削除')));
+          h('td', null, h('button', { class: 'btn-link danger', type: 'button', on: { click: () => { c.ownership.splice(i, 1); state.dirty = `持分比率の推移（${c.code}）`; draw(); } } }, '削除')));
       }));
     };
     draw();
@@ -133,10 +133,12 @@ function ownershipCard(data) {
       chart = lineChart({ wide: true, height: 220, title: `${c.code} の持分比率の推移（％、月次）`, subtitle: `異動日とみなし日：${st.map((x) => `${x.rec.date}（${OWN_KINDS[x.rec.kind] || ''}）→ みなし日 ${indexToJp(x.deemedIdx)}末・${indexToJp(x.fromIdx)}から ${pctTxt(x.parent)}`).join('、')}`, labels: months.map(lab),
         series: [{ name: '親会社持分比率', values: months.map((m) => Math.round((1 - rateAt(saved, m, 'nciRatio')) * 1000) / 10), color: 'var(--s1)' }, { name: '非支配株主持分比率', values: months.map((m) => Math.round(rateAt(saved, m, 'nciRatio') * 1000) / 10), color: 'var(--s2)', dashed: true }], unit: '％' });
     }
-    return h('details', { id: `own-${c.code}`, open: c.ownership.length > 0 }, h('summary', null, h('b', null, `${c.code} ${c.name}`), summary), chart,
+    // 入力・追加・削除をしたら、保存せずに画面を移るときに確認する
+    const dirty = () => { state.dirty = `持分比率の推移（${c.code}）`; };
+    return h('details', { id: `own-${c.code}`, open: c.ownership.length > 0, on: { input: dirty, change: (e) => { if (e.target !== e.currentTarget) dirty(); } } }, h('summary', null, h('b', null, `${c.code} ${c.name}`), summary), chart,
       h('div', { class: 'tbl-wrap' }, h('table', { class: 'tbl compact form-table' }, h('thead', null, h('tr', null, ['異動日', '種類', '異動後の親会社持分比率（％）', '非支配株主持分比率', 'みなし日', '新しい比率を使う月', '備考', ''].map((t) => h('th', null, t)))), body)),
       h('div', { class: 'actions' },
-        h('button', { class: 'btn', type: 'button', on: { click: () => { const last = c.ownership[c.ownership.length - 1]; c.ownership.push({ date: '', kind: c.ownership.length ? 'add' : 'acquire', ratio: last ? last.ratio : 1, deemed: 'nearest_month_end', memo: '' }); draw(); } } }, '＋ 異動を追加'),
+        h('button', { class: 'btn', type: 'button', on: { click: () => { const last = c.ownership[c.ownership.length - 1]; c.ownership.push({ date: '', kind: c.ownership.length ? 'add' : 'acquire', ratio: last ? last.ratio : 1, deemed: 'nearest_month_end', memo: '' }); state.dirty = `持分比率の推移（${c.code}）`; draw(); } } }, '＋ 異動を追加'),
         h('button', { class: 'btn btn-primary', type: 'button', on: { click: () => {
           if (c.ownership.some((x) => !/^\d{4}-\d{2}-\d{2}$/.test(x.date || ''))) return toast('異動日を入力してください', 'error');
           if (c.ownership.some((x) => !(x.ratio >= 0 && x.ratio <= 1))) return toast('親会社持分比率は0〜100％で入力してください', 'error');
