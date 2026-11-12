@@ -254,7 +254,7 @@ export function sanitizeData(raw) {
   return {
     data: {
       version: 1,
-      config: { unit: str(cfg.unit || '千円', 10), fyeMonth: int(cfg.fyeMonth, 3, { min: 1, max: 12 }), accountNames, carry: sanitizeCarry(cfg.carry) },
+      config: { unit: str(cfg.unit || '千円', 10), fyeMonth: int(cfg.fyeMonth, 3, { min: 1, max: 12 }), accountNames, carry: sanitizeCarry(cfg.carry), testDataVersion: int(cfg.testDataVersion, 0, { min: 0, max: 1000 }) },
       companies,
       contracts,
       notes,

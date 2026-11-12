@@ -243,6 +243,7 @@ function render() {
   const warns = [];
   if (!state.storageOk) warns.push(h('div', { class: 'alert alert-warn' }, 'この環境ではブラウザに保存できないため、変更は再読み込みで消えます。「データの保存・変更履歴」で保存ファイルに書き出してください。'));
   if (state.loadError) warns.push(h('div', { class: 'alert alert-err' }, state.loadError));
+  if (state.loadNotice) warns.push(h('div', { class: 'alert alert-info' }, state.loadNotice, ' ', h('button', { class: 'btn-link', type: 'button', on: { click: () => { state.loadNotice = null; render(); } } }, '閉じる')));
   if (state.loadWarnings.length) warns.push(h('div', { class: 'alert alert-warn' }, `保存データの読込時に自動で直しました：${state.loadWarnings.slice(0, 3).join('／')}${state.loadWarnings.length > 3 ? ` ほか${state.loadWarnings.length - 3}件` : ''}`));
   main.append(pageHead(page, ctx), ...warns);
   if (page.step) main.append(h('h2', { class: 'step-title' }, h('span', { class: 'nav-no' }, String(page.step)), page.label));

@@ -4,10 +4,13 @@
 import { extraContracts, extraCompany } from './sampleExtra.js';
 import { moreContracts, moreCompanies, financeLeaseContracts } from './sampleMore.js';
 
+/** テスト物件の版（物件を追加したら上げる。保存済みのデータに未登録のテスト物件を一度だけ自動で追加するために使う） */
+export const TEST_DATA_VERSION = 3;
+
 export function sampleData() {
   return {
     version: 1,
-    config: { unit: '千円', fyeMonth: 3, accountNames: {} },
+    config: { unit: '千円', fyeMonth: 3, accountNames: {}, testDataVersion: TEST_DATA_VERSION },
     companies: [
       { code: 'P', name: '親会社P', isParent: true, fyeMonth: 3, taxRate: 0.3, nciRatio: 0, taxEffect: true, currency: 'JPY', adoption: { method: 'cumulative', ym: '2027-04' } },
       { code: 'S1', name: '子会社S1（100%）', fyeMonth: 3, taxRate: 0.3, nciRatio: 0, taxEffect: true, currency: 'JPY', adoption: { method: 'cumulative', ym: '2027-04' } },

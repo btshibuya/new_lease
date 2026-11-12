@@ -57,7 +57,7 @@ export function renderContracts(ctx) {
     const t = q.trim().toLowerCase();
     const shown = t ? data.contracts.filter((c) => [c.id, c.name, c.lessorCo, c.lesseeCo, co(c.lessorCo), co(c.lesseeCo)].some((x) => String(x).toLowerCase().includes(t))) : data.contracts;
     listBox.replaceChildren(shown.length ? table(cols, shown, { rowClass: (c) => (sel && c.id === sel.id ? 'selected' : '') }) : emptyState(t ? '該当する契約がありません' : '契約がありません。「＋ 契約を追加」または「CSVで一括取込」で登録してください。'));
-    count.textContent = t ? `${shown.length}件／全${data.contracts.length}件` : `全${data.contracts.length}件`;
+    count.textContent = `${t ? `${shown.length}件／全${data.contracts.length}件` : `全${data.contracts.length}件`}${shown.length > 8 ? '（一覧の枠内を下へスクロールすると、すべての契約を表示します）' : ''}`;
   };
   drawList();
   const filter = h('input', { type: 'search', placeholder: '契約番号・契約名・会社で絞り込み', 'aria-label': '契約の絞り込み', class: 'list-filter', on: { input: (e) => drawList(e.target.value) } });
