@@ -177,7 +177,18 @@ export function deemedMonthIdx(rec, fyeMonth = 3) {
 }
 
 /** 異動の記録を日付順に並べ、非支配株主持分比率（1−親会社持分比率）と適用開始月を付ける */
+const stepCache = new WeakMap(); // 異動の記録（配列）→ 適用開始月つきの推移。月ごとの比率の照会で毎回並べ替えないように
 export function ownershipSteps(co) {
+  const own = co.ownership || [];
+  // 同じ配列の中身が書き換えられても古い結果を返さないよう、内容（日付・比率・みなし日）も照合する
+  const sig = `${co.fyeMonth || 3}|${own.map((r) => `${r.date},${r.ratio},${r.deemed},${r.effYm}`).join(';')}`;
+  const hit = stepCache.get(own);
+  if (hit && hit.sig === sig) return hit.steps;
+  const steps = computeSteps(co);
+  stepCache.set(own, { sig, steps });
+  return steps;
+}
+function computeSteps(co) {
   return [...(co.ownership || [])].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)).map((r) => {
     const dm = deemedMonthIdx(r, co.fyeMonth || 3);
     return { rec: r, deemedIdx: dm, fromIdx: dm + 1, parent: r.ratio, nci: Math.round((1 - r.ratio) * 1e10) / 1e10 };

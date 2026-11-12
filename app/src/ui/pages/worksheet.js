@@ -126,7 +126,7 @@ export function renderWorksheet(ctx) {
   const proofCards = renderProofs(ctx);
   const rollCard = renderRollforward(ctx);
 
-  return h('div', { class: 'page' },
+  return h('div', { class: 'page ws-page' },
     card(`連結精算表（グループ内リース関連科目、借方＋／貸方△）：${coLabel}`,
       h('div', { class: 'alert alert-info' }, '個別の金額はアプリの計算値です（個別帳簿との一致は「検算 CHK-10」で確認）。「グループ内：連結後0」の科目が0になっていれば消去は完全です。会社を選ぶと、その会社の個別・個社修正・連結修正の行だけで集計します（会社ごとの連結パッケージの確認用。消去は会社ごとにも0になります）。'),
       h('div', { class: 'actions' }, coSel, granSel, h('button', { class: 'btn', type: 'button', on: { click: exportWs } }, '表を書き出す（CSV）'), h('span', { class: 'muted small' }, '金額を押すと内訳を表示し、元帳・仕訳帳へ移動できます。')),

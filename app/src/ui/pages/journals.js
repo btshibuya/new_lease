@@ -141,11 +141,15 @@ function nextPeriodOf(ctx) {
 }
 
 /** 翌期の開始仕訳：内容別・会社別に作成し、前期以前のどの年度の仕訳から生じたかをトレースする */
+const nextMemo = new WeakMap(); // スケジュールの計算結果（データの版ごと）→ 期間 → 翌期の仕訳
 function nextOpeningCard(ctx, match) {
   const { data, pol, names, companies, schedCache, yearPeriods, period } = ctx;
   const np = nextPeriodOf(ctx);
   let gen2;
-  try { gen2 = generateAll(data, np, pol, { schedCache }); } catch (e) { return card('翌期の開始仕訳', h('div', { class: 'alert alert-err' }, e.message)); }
+  // 翌期の仕訳は、同じデータ（スケジュールの計算結果）・同じ期間なら使い回す（絞り込みの変更のたびに計算し直さない）
+  const memo = nextMemo.get(schedCache) || nextMemo.set(schedCache, new Map()).get(schedCache);
+  const mk = `${np.start}|${np.end}|${np.ytd ? 1 : 0}`;
+  try { gen2 = memo.get(mk) || memo.set(mk, generateAll(data, np, pol, { schedCache })).get(mk); } catch (e) { return card('翌期の開始仕訳', h('div', { class: 'alert alert-err' }, e.message)); }
   const opens = gen2.journals.filter((j) => ['C-01', 'C-01T', 'C-01N', 'M-01O'].includes(j.tpl) && (filter.contract === 'all' || j.contractId === filter.contract) && (filter.kind === 'all' || j.kind === filter.kind));
   if (!opens.length) return card(`翌期の開始仕訳（${np.label}の期首）`, emptyState(pol['POL-03'] === 'balance' ? '会計方針 POL-03 が「期末残高一括消去」のため、開始仕訳は作りません。' : '翌期に引き継ぐ仕訳はありません。'));
   // 会社別：すべての会社を表示するときは、連結（CONSOL）の行をその仕訳の貸手の会社に含める（組替の相手勘定のため、貸借がそろう）。
@@ -171,14 +175,15 @@ function nextOpeningCard(ctx, match) {
     const agg = { id: `N-${contentKey(g.j0)}-${g.co}`, tpl: g.j0.tpl, src: g.j0.src, kind: g.j0.kind, title: contentName(g.j0), company: g.co, groupLabel: `${coName(g.co)}：${g.parts.length}契約`, lines, parts: g.parts, partial };
     const years = [...new Set(g.trace.map((x) => x.year))];
     const traceRows = g.trace.slice().sort((a, b) => years.indexOf(a.year) - years.indexOf(b.year) || a.contract.localeCompare(b.contract));
-    const traceTbl = traceRows.length ? h('details', { class: 'basis' }, h('summary', null, `前期以前のどの仕訳から生じたか（年度別：${years.length}年度・${traceRows.length}行）`),
-      h('div', { class: 'tbl-wrap scroll-y' }, h('table', { class: 'tbl compact' },
+    // 年度別の内訳の表は、開いたときに作る（翌期の開始仕訳は本数が多く、すべて作ると表示が遅くなるため）
+    const traceBody = () => h('div', { class: 'tbl-wrap scroll-y' }, h('table', { class: 'tbl compact' },
         h('thead', null, h('tr', null, ['年度', '元の仕訳', '契約', '科目', '借方', '貸方'].map((t) => h('th', null, t)))),
         h('tbody', null, years.flatMap((y) => {
           const rs = traceRows.filter((x) => x.year === y);
           return [...rs.map((x) => h('tr', null, h('td', { class: 'nw' }, x.year), h('td', { class: 'small' }, x.note), h('td', { class: 'nw' }, x.contract), h('td', null, accountLabel({ acc: x.acc, meta: {} }, pol, names)), amt(x.amt > 0 ? x.amt : null), amt(x.amt < 0 ? -x.amt : null))),
             h('tr', { class: 'total' }, h('td', null, `${y} 計`), h('td'), h('td'), h('td'), amt(rs.filter((x) => x.amt > 0).reduce((a, x) => a + x.amt, 0)), amt(-rs.filter((x) => x.amt < 0).reduce((a, x) => a + x.amt, 0)))];
-        }))))) : (g.j0.tpl === 'M-01O' ? h('p', { class: 'muted small' }, '手入力仕訳（翌期以降も引き継ぐ設定）の開始仕訳です。') : null);
+        }))));
+    const traceTbl = traceRows.length ? h('details', { class: 'basis', on: { toggle: (e) => { const d = e.currentTarget; if (d.open && !d.dataset.built) { d.dataset.built = '1'; d.append(traceBody()); } } } }, h('summary', null, `前期以前のどの仕訳から生じたか（年度別：${years.length}年度・${traceRows.length}行）`)) : (g.j0.tpl === 'M-01O' ? h('p', { class: 'muted small' }, '手入力仕訳（翌期以降も引き継ぐ設定）の開始仕訳です。') : null);
     return h('div', { class: 'next-open' }, journalCard(agg, { pol, names, companies }, {}), traceTbl);
   });
   return h('section', { class: 'card', id: 'next-opening' }, h('h2', null, `翌期の開始仕訳（${np.label}の期首）：${list.length}本`),

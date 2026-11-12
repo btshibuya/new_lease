@@ -122,24 +122,60 @@ test('期中の持分変動：四半期の合計＝年度（非支配株主帰�
   assert.equal(capOpen, sumOf(year, 'CAP_SURPLUS'));
 });
 
-test('全サンプル契約・全会計方針の組合せ・年度/四半期で検算NGがない', () => {
-  const periods = [...buildPeriods(ymToIndex('2027-04'), ymToIndex('2034-03'), 3), ...buildPeriods(ymToIndex('2027-04'), ymToIndex('2028-03'), 3, 'quarter')];
-  const ids = ['POL-01', 'POL-02', 'POL-03', 'POL-04', 'POL-05', 'POL-06', 'POL-07', 'POL-10', 'POL-11'];
-  function* combos(i, cur) {
-    if (i === ids.length) { yield { ...cur }; return; }
-    for (const o of POLICIES.find((p) => p.id === ids[i]).options) { cur[ids[i]] = o.value; yield* combos(i + 1, cur); }
+const POLICY_IDS = ['POL-01', 'POL-02', 'POL-03', 'POL-04', 'POL-05', 'POL-06', 'POL-07', 'POL-10', 'POL-11'];
+function allCombos() {
+  const out = [];
+  const rec = (i, cur) => {
+    if (i === POLICY_IDS.length) { out.push({ ...cur }); return; }
+    for (const o of POLICIES.find((p) => p.id === POLICY_IDS[i]).options) { cur[POLICY_IDS[i]] = o.value; rec(i + 1, cur); }
+  };
+  rec(0, defaultPolicies());
+  return out;
+}
+/** 2つの方針の選択肢のすべての組（ペア）を少なくとも1回含む組合せ（全組合せから貪欲に選ぶ） */
+function pairwiseCombos() {
+  const all = allCombos();
+  const pairsOf = (c) => { const ps = []; for (let i = 0; i < POLICY_IDS.length; i++) for (let j = i + 1; j < POLICY_IDS.length; j++) ps.push(`${POLICY_IDS[i]}=${c[POLICY_IDS[i]]}|${POLICY_IDS[j]}=${c[POLICY_IDS[j]]}`); return ps; };
+  const need = new Set(all.flatMap(pairsOf));
+  const picked = [defaultPolicies()];
+  for (const p of pairsOf(picked[0])) need.delete(p);
+  while (need.size) {
+    let best = null, bestN = -1;
+    for (const c of all) { const n = pairsOf(c).filter((p) => need.has(p)).length; if (n > bestN) { best = c; bestN = n; } }
+    picked.push(best);
+    for (const p of pairsOf(best)) need.delete(p);
   }
+  return picked;
+}
+function noNg(d, combos, periods) {
   let n = 0;
-  for (const c of combos(0, defaultPolicies())) {
+  for (const c of combos) {
+    // スケジュールは方針の組合せごとに一度だけ作る（期間によらないため。画面と同じ使い方）
+    const schedCache = new Map(d.contracts.map((k) => [k.id, buildSchedule(k, c, { lesseeCompany: d.companies.find((x) => x.code === k.lesseeCo) })]));
     for (const p of periods) {
-      const g = generateAll(data, p, c);
-      const ch = runChecks(data, p, c, g);
+      const g = generateAll(d, p, c, { schedCache });
+      const ch = runChecks(d, p, c, g, {}, { schedCache });
       const ng = ch.filter((x) => x.status === 'ng' && x.id !== 'CHK-10');
       assert.equal(ng.length, 0, `${JSON.stringify(c)} ${p.label} ${ng.map((x) => x.id + x.detail).join()}`);
       n++;
     }
   }
-  assert.ok(n > 1000);
+  return n;
+}
+
+test('当初の7契約・全会計方針の組合せ・年度/四半期で検算NGがない', () => {
+  const periods = [...buildPeriods(ymToIndex('2027-04'), ymToIndex('2034-03'), 3), ...buildPeriods(ymToIndex('2027-04'), ymToIndex('2028-03'), 3, 'quarter')];
+  const d7 = { ...data, companies: data.companies.filter((c) => c.code !== 'S4'), contracts: data.contracts.filter((c) => Number(c.id.slice(2)) <= 7) };
+  assert.equal(d7.contracts.length, 7);
+  assert.ok(noNg(d7, allCombos(), periods) > 1000);
+});
+
+test('全27契約・会計方針の2因子網羅（どの2つの方針の選択肢の組も含む）・年度/四半期/月次で検算NGがない', () => {
+  const periods = [...buildPeriods(ymToIndex('2027-04'), ymToIndex('2034-03'), 3), ...buildPeriods(ymToIndex('2027-04'), ymToIndex('2030-03'), 3, 'quarter'), ...buildPeriods(ymToIndex('2029-04'), ymToIndex('2030-03'), 3, 'month')];
+  const combos = pairwiseCombos();
+  assert.ok(combos.length >= 6 && combos.length < allCombos().length / 10, `組合せ ${combos.length}`);
+  assert.equal(data.contracts.length, 27);
+  noNg(data, combos, periods);
 });
 
 test('消去後のグループ内残高は0（精算表）', () => {

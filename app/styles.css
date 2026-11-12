@@ -214,6 +214,9 @@ legend { font-weight: 700; color: var(--navy); padding: 0 6px; }
 .ov-table select { max-width: 260px; }
 /* 仕訳表は画面（カード）の横幅に合わせて切り替える：十分な幅があれば「借方科目｜借方金額｜貸方科目｜貸方金額」、狭ければ「科目｜借方｜貸方」 */
 .journal-card { container-type: inline-size; }
+/* 画面外の仕訳カードは描画・配置の計算を省く（仕訳の本数が多いときの表示速度のため。内容・検索・ジャンプはそのまま） */
+.journals > .journal-card, .next-open { content-visibility: auto; contain-intrinsic-size: auto 260px; }
+.ws-page > .card:not(:first-child) { content-visibility: auto; contain-intrinsic-size: auto 700px; }
 @container (max-width: 600px) {
   .tbl-wrap:has(> .tbl.journal) { display: none; }
   .journal-m-wrap { display: block; }

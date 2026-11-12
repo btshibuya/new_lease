@@ -103,7 +103,8 @@ export function sum(arr, f = (x) => x) {
 export function fmt(v) {
   if (v === null || v === undefined || Number.isNaN(v)) return '';
   const n = Math.round(v);
-  const s = Math.abs(n).toLocaleString('ja-JP');
+  // toLocaleString('ja-JP') と同じ3桁区切り（画面の金額表示で多数呼ばれるため、軽い正規表現で行う）
+  const s = String(Math.abs(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   return n < 0 ? `△${s}` : s;
 }
 

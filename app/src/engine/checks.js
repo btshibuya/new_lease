@@ -24,7 +24,7 @@ function rateIndep(co, idx, key) {
   if (!co) return 0;
   if (key === 'nciRatio' && co.ownership && co.ownership.length) {
     // 持分比率の推移：異動ごとにみなし日を候補の月末から総当たりで選び（等距離は前）、その翌月から 1−親会社持分比率 を使う
-    const recs = co.ownership.map((r) => ({ r, from: deemedIndep(r, co.fyeMonth || 3) + 1 })).sort((a, b) => b.r.date.localeCompare(a.r.date));
+    const recs = indepSteps(co);
     for (const x of recs) if (x.from <= idx) return 1 - x.r.ratio;
     return 1 - recs[recs.length - 1].r.ratio;
   }
@@ -34,6 +34,16 @@ function rateIndep(co, idx, key) {
     if ((y - 0) * 12 + (m - 1) <= idx) return h[key] || 0;
   }
   return co[key] || 0;
+}
+
+const indepCache = new WeakMap();
+function indepSteps(co) {
+  const key = `${co.fyeMonth || 3}|${JSON.stringify(co.ownership)}`;
+  const hit = indepCache.get(co.ownership);
+  if (hit && hit.key === key) return hit.recs;
+  const recs = co.ownership.map((r) => ({ r, from: deemedIndep(r, co.fyeMonth || 3) + 1 })).sort((a, b) => b.r.date.localeCompare(a.r.date));
+  indepCache.set(co.ownership, { key, recs });
+  return recs;
 }
 
 /** みなし日（エンジンの deemedMonthIdx とは別実装：前後13か月の月末を候補として日数の差が最小のものを選ぶ） */
@@ -85,12 +95,17 @@ function lessorIncomeFromTerms(c, R) {
   const mods = sortedMods(c);
   const term = c.terminationYm ? ymToIndex(c.terminationYm) : null;
   const TR = c.lessor?.termMonths ? s + c.lessor.termMonths - 1 : null;
+  const plans = new Map(); // 有効な条件変更の件数 → 支払予定（月ごとに作り直さない）
   const planAt = (m) => {
     // 月 m 時点で有効な契約条件のもとでの支払予定と終了月
-    const known = { ...c, modifications: mods.filter((x) => ymToIndex(x.ym) <= m) };
+    const eff = mods.filter((x) => ymToIndex(x.ym) <= m);
+    if (plans.has(eff.length)) return plans.get(eff.length);
+    const known = { ...c, modifications: eff };
     let N = c.termMonths;
     for (const x of known.modifications) N = x.termMonths ?? N;
-    return { pays: paymentsFromTerms({ ...known, terminationYm: null }, true), end: s + N - 1 };
+    const plan = { pays: paymentsFromTerms({ ...known, terminationYm: null }, true), end: s + N - 1 };
+    plans.set(eff.length, plan);
+    return plan;
   };
   const out = new Map();
   let R_bal = 0, segStart = s, segEnd = null, segTotal = 0, cumPrev = 0;

@@ -92,14 +92,17 @@ export function journalCard(j, ctx, opts = {}) {
   const tblM = h('div', { class: 'tbl-wrap journal-m-wrap' }, h('table', { class: 'tbl journal-m' },
     h('thead', null, h('tr', null, h('th', null, '科目（会社）'), h('th', null, '借方'), h('th', null, '貸方'))),
     h('tbody', null, mRows, h('tr', { class: 'total' }, h('td', null, `合計（${balText}）`), amt(tot), amt(totC)))));
-  const basis = h('details', { class: 'basis' }, h('summary', null, 'この仕訳の根拠をすべて表示（金額を押すと右の「計算の確認」でも見られます）'),
+  // 根拠の一覧と月次の明細は、開いたときに作る（仕訳の本数が多いと画面の要素が増え、表示が遅くなるため。内容は同じ）
+  const basisBody = () => [
     h('ul', { class: 'basis-list' }, j.lines.map((l) => h('li', null, h('strong', null, `${accountLabel(l, pol, names)}（${coName(l.co, companies)}）${l.amt > 0 ? '借方' : '貸方'} ${fmt(Math.abs(l.amt))}`), l.bases && l.bases.length ? h('ul', null, l.bases.slice(0, 6).map((b) => h('li', null, b)), l.bases.length > 6 ? h('li', null, `ほか ${l.bases.length - 6} 件`) : null) : null))),
     j.details && j.details.length ? h('div', null, h('div', { class: 'sub-title' }, `月次の明細（${j.details.length}件：個別仕訳の取消）`),
       h('div', { class: 'tbl-wrap scroll-y' }, h('table', { class: 'tbl compact' },
         h('thead', null, h('tr', null, h('th', null, '年月'), h('th', null, '内容'), h('th', null, '借方'), h('th', null, '貸方'))),
         h('tbody', null, j.details.map((d) => h('tr', null, h('td', null, indexToJp(d.m)), h('td', null, d.note),
           h('td', null, d.lines.filter((l) => l.amt > 0).map((l) => `${accountLabel(l, pol, names)} ${fmt(l.amt)}`).join('、')),
-          h('td', null, d.lines.filter((l) => l.amt < 0).map((l) => `${accountLabel(l, pol, names)} ${fmt(-l.amt)}`).join('、')))))))) : null);
+          h('td', null, d.lines.filter((l) => l.amt < 0).map((l) => `${accountLabel(l, pol, names)} ${fmt(-l.amt)}`).join('、')))))))) : null];
+  const basis = h('details', { class: 'basis', on: { toggle: (e) => { if (e.target === basis && basis.open && !basis.dataset.built) { basis.dataset.built = '1'; basis.append(...basisBody().filter(Boolean)); } } } },
+    h('summary', null, 'この仕訳の根拠をすべて表示（金額を押すと右の「計算の確認」でも見られます）'));
   // 合算した仕訳は、会社別・契約別にドリルダウンできる（開いたときに作る）
   let drill = null;
   if (j.parts && j.parts.length > 1 && !opts.noDrill) {

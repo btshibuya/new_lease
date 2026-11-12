@@ -49,30 +49,34 @@ async function ngIds(dir) {
   const { sampleData } = await imp('sample.js');
   const { generateAll } = await imp('elimination.js');
   const { runChecks } = await imp('checks.js');
+  const { buildSchedule } = await imp('schedule.js');
   const { defaultPolicies } = await imp('policies.js');
   const { buildPeriods, ymToIndex } = await imp('util.js');
   const d = sampleData();
   // 旧科目＋流動区分あり・税率/持分比率の変更がある会社も加えて検査範囲を広げる
-  d.companies.push({ code: 'S4', name: 'S4', fyeMonth: 3, taxRate: 0.3, nciRatio: 0.3, taxEffect: true, legacyAccounts: true, splitsCurrent: true, history: [{ fromYm: '2029-04', taxRate: 0.32, nciRatio: 0.2 }] });
-  d.contracts.push({ ...JSON.parse(JSON.stringify(d.contracts[0])), id: 'K-901', lesseeCo: 'S4', actuals: {}, lessor: { ...d.contracts[0].lessor, assetId: 'A-09' } });
+  d.companies.push({ code: 'M4', name: 'M4', fyeMonth: 3, taxRate: 0.3, nciRatio: 0.3, taxEffect: true, legacyAccounts: true, splitsCurrent: true, history: [{ fromYm: '2029-04', taxRate: 0.32, nciRatio: 0.2 }] });
+  d.contracts.push({ ...JSON.parse(JSON.stringify(d.contracts[0])), id: 'K-901', lesseeCo: 'M4', actuals: {}, lessor: { ...d.contracts[0].lessor, assetId: 'M-09' } });
   // 範囲縮小（期間短縮）、遡及測定（適用時の割引率が契約時と異なる）、ASC842 の条件変更
-  d.companies.push({ code: 'S5', name: 'S5', fyeMonth: 3, taxRate: 0.3, nciRatio: 0, taxEffect: true, adoption: { method: 'cumulative', ym: '2027-04' } });
-  d.contracts.push({ ...JSON.parse(JSON.stringify(d.contracts[0])), id: 'K-903', lesseeCo: 'S4', modifications: [{ ym: '2029-04', payment: null, termMonths: 48, rate: null }], lessor: { ...d.contracts[0].lessor, assetId: 'A-11' }, actuals: {} });
-  d.contracts.push({ ...JSON.parse(JSON.stringify(d.contracts[0])), id: 'K-904', lesseeCo: 'S5', commencement: '2025-04', termMonths: 96, lessee: { ...d.contracts[0].lessee, rate: 0.04, rouTransition: 'retrospective', transitionRate: 0.025 }, lessor: { ...d.contracts[0].lessor, assetId: 'A-12', assetStart: '2025-04' }, actuals: {} });
-  d.contracts.push({ ...JSON.parse(JSON.stringify(d.contracts[3])), id: 'K-905', modifications: [{ ym: '2028-08', payment: 360, termMonths: 60, rate: 0.05 }], lessor: { ...d.contracts[3].lessor, assetId: 'A-13' }, actuals: {} });
+  d.companies.push({ code: 'M5', name: 'M5', fyeMonth: 3, taxRate: 0.3, nciRatio: 0, taxEffect: true, adoption: { method: 'cumulative', ym: '2027-04' } });
+  d.contracts.push({ ...JSON.parse(JSON.stringify(d.contracts[0])), id: 'K-903', lesseeCo: 'M4', modifications: [{ ym: '2029-04', payment: null, termMonths: 48, rate: null }], lessor: { ...d.contracts[0].lessor, assetId: 'M-11' }, actuals: {} });
+  d.contracts.push({ ...JSON.parse(JSON.stringify(d.contracts[0])), id: 'K-904', lesseeCo: 'M5', commencement: '2025-04', termMonths: 96, lessee: { ...d.contracts[0].lessee, rate: 0.04, rouTransition: 'retrospective', transitionRate: 0.025 }, lessor: { ...d.contracts[0].lessor, assetId: 'M-12', assetStart: '2025-04' }, actuals: {} });
+  d.contracts.push({ ...JSON.parse(JSON.stringify(d.contracts[3])), id: 'K-905', modifications: [{ ym: '2028-08', payment: 360, termMonths: 60, rate: 0.05 }], lessor: { ...d.contracts[3].lessor, assetId: 'M-13' }, actuals: {} });
   // フリーレント中に条件変更（貸手の未収が残った状態で新たなリースとして扱う）
-  d.contracts.push({ ...JSON.parse(JSON.stringify(d.contracts[1])), id: 'K-902', lesseeCo: 'S4', freePayments: 4, steps: [], modifications: [{ ym: '2027-07', payment: 60, termMonths: 36, rate: 0.03 }], lessee: { ...d.contracts[1].lessee, idc: 0 }, lessor: { ...d.contracts[1].lessor, assetId: 'A-10', ratio: 1 }, actuals: {} });
+  d.contracts.push({ ...JSON.parse(JSON.stringify(d.contracts[1])), id: 'K-902', lesseeCo: 'M4', freePayments: 4, steps: [], modifications: [{ ym: '2027-07', payment: 60, termMonths: 36, rate: 0.03 }], lessee: { ...d.contracts[1].lessee, idc: 0 }, lessor: { ...d.contracts[1].lessor, assetId: 'M-10', ratio: 1 }, actuals: {} });
   // 持分比率の推移（異動日・みなし日）がある会社：期中の追加取得（等距離の日付）、四半期末みなしの一部売却
-  d.companies.push({ code: 'S6', name: 'S6', fyeMonth: 3, taxRate: 0.3, nciRatio: 0, taxEffect: true, adoption: { method: 'cumulative', ym: '2027-04' }, ownership: [
+  d.companies.push({ code: 'M6', name: 'M6', fyeMonth: 3, taxRate: 0.3, nciRatio: 0, taxEffect: true, adoption: { method: 'cumulative', ym: '2027-04' }, ownership: [
     { date: '2027-04-01', ratio: 0.8, kind: 'acquire', deemed: 'nearest_month_end' }, { date: '2027-09-15', ratio: 0.9, kind: 'add', deemed: 'nearest_month_end' },
     { date: '2028-11-15', ratio: 0.6, kind: 'sell', deemed: 'nearest_quarter_end' }] });
-  d.contracts.push({ ...JSON.parse(JSON.stringify(d.contracts[0])), id: 'K-906', lesseeCo: 'S6', frequencyMonths: 1, payment: 90, lessor: { ...d.contracts[0].lessor, assetId: 'A-14' }, actuals: {} });
+  d.contracts.push({ ...JSON.parse(JSON.stringify(d.contracts[0])), id: 'K-906', lesseeCo: 'M6', frequencyMonths: 1, payment: 90, lessor: { ...d.contracts[0].lessor, assetId: 'M-14' }, actuals: {} });
   const periods = [...buildPeriods(ymToIndex('2027-04'), ymToIndex('2034-03'), 3), ...buildPeriods(ymToIndex('2027-04'), ymToIndex('2029-03'), 3, 'quarter')];
   const hit = new Set();
   for (const pol of [defaultPolicies(), { ...defaultPolicies(), 'POL-07': 'capitalize', 'POL-03': 'balance' }]) {
+    // スケジュールは方針ごとに一度だけ作る（誤りを入れたスケジュール計算も、この同じ版を使う）
+    const schedCache = new Map();
+    for (const k of d.contracts) { try { schedCache.set(k.id, buildSchedule(k, pol, { lesseeCompany: d.companies.find((x) => x.code === k.lesseeCo) })); } catch (e) { hit.add(`例外:${e.message}`); } }
     for (const p of periods) {
       try {
-        for (const c of runChecks(d, p, pol, generateAll(d, p, pol))) if (c.status === 'ng' && c.id !== 'CHK-10') hit.add(c.id);
+        for (const c of runChecks(d, p, pol, generateAll(d, p, pol, { schedCache }), {}, { schedCache })) if (c.status === 'ng' && c.id !== 'CHK-10') hit.add(c.id);
       } catch (e) { hit.add(`例外:${e.message}`); }
     }
   }

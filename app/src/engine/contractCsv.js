@@ -26,7 +26,8 @@ function toNum(v, errs, label) {
 function toPct(v, errs, label) {
   const t = norm(v).replace(/%$/, '');
   const n = toNum(t, errs, label);
-  return n === null ? null : n / 100;
+  // 百分率→小数。2.8 / 100 ＝ 0.027999… のような浮動小数点の誤差を残さない（書き出し→取込で値が変わらないように）
+  return n === null ? null : Math.round((n / 100) * 1e10) / 1e10;
 }
 
 /** 年月：2027-04、2027/4、2027/4/1、2027年4月 などを YYYY-MM に。空欄は null */

@@ -1,4 +1,7 @@
 // サンプルデータ（金額単位：千円）。K-001 は要件定義書 第10章の設例と同一条件。
+// K-008〜K-027 と子会社 S4（持分比率が期中に変動）はテスト用の追加物件（sampleExtra.js）。
+import { extraContracts, extraCompany } from './sampleExtra.js';
+
 export function sampleData() {
   return {
     version: 1,
@@ -8,6 +11,7 @@ export function sampleData() {
       { code: 'S1', name: '子会社S1（100%）', fyeMonth: 3, taxRate: 0.3, nciRatio: 0, taxEffect: true, currency: 'JPY', adoption: { method: 'cumulative', ym: '2027-04' } },
       { code: 'S2', name: '子会社S2（60%・12月決算）', fyeMonth: 12, taxRate: 0.3, nciRatio: 0.4, taxEffect: true, legacyAccounts: true, splitsCurrent: false, currency: 'JPY', adoption: { method: 'cumulative', ym: '2028-01' }, history: [{ fromYm: '2030-04', taxRate: 0.31, nciRatio: 0.4 }] },
       { code: 'S3', name: '在外子会社S3（80%・US GAAP）', fyeMonth: 3, taxRate: 0.27, nciRatio: 0.2, taxEffect: true, currency: 'JPY', adoption: { method: 'applied', ym: '2019-04' } },
+      extraCompany(),
     ],
     contracts: [
       {
@@ -67,6 +71,7 @@ export function sampleData() {
         lessor: { assetId: 'A-07', assetCost: 3000, assetLifeMonths: 120, assetStart: '2027-04', ratio: 1, incClass: 'sales', depClass: 'cogs', termMonths: 48 },
         actuals: {},
       },
+      ...extraContracts(),
     ],
     notes: {},
     manualJournals: [],

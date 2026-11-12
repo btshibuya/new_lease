@@ -38,6 +38,7 @@ export function parentFye(data) {
 
 /** 計算（画面描画のたびに実行。契約数千件規模までを想定） */
 let memo = { key: null, ctx: null };
+let schedMemo = { version: -1, cache: null };
 const lockCache = new Map();
 let lockCacheVersion = -1;
 
@@ -61,10 +62,15 @@ export function compute() {
     idx = Math.max(0, periods.findIndex((p) => p.start >= fs));
   }
   const period = periods[idx];
-  const schedCache = new Map();
-  for (const c of d.contracts) {
-    try { schedCache.set(c.id, buildSchedule(c, pol, { lesseeCompany: d.companies.find((x) => x.code === c.lesseeCo) })); } catch { /* 入力エラーは検算で表示 */ }
+  // 返済・償却スケジュールは期間によらないため、データ・方針が変わるまで（版番号が同じ間）使い回す
+  if (schedMemo.version !== state.version) {
+    const cache = new Map();
+    for (const c of d.contracts) {
+      try { cache.set(c.id, buildSchedule(c, pol, { lesseeCompany: d.companies.find((x) => x.code === c.lesseeCo) })); } catch { /* 入力エラーは検算で表示 */ }
+    }
+    schedMemo = { version: state.version, cache };
   }
+  const schedCache = schedMemo.cache;
   const gen = generateAll(d, period, pol, { schedCache });
   const names = d.config.accountNames || {};
   const checks = runChecks(d, period, pol, gen, names, { schedCache, lockCache });

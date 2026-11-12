@@ -8,6 +8,7 @@ import { defaultPolicies } from '../app/src/engine/policies.js';
 import { sampleData } from '../app/src/engine/sample.js';
 import { sanitizeData } from '../app/src/engine/data.js';
 import { buildPeriods, ymToIndex, indexToYm } from '../app/src/engine/util.js';
+import { ACCOUNTS } from '../app/src/engine/accounts.js';
 
 const pol = defaultPolicies();
 const base = sampleData();
@@ -103,7 +104,7 @@ import { contractMonthly, rollupMonthly, contractYearly, eFromSchedule } from '.
 import { currentPortion } from '../app/src/engine/schedule.js';
 
 test('契約の月次レポート：年度に集計すると年度別サマリー（支払・利息・元本・期末負債・簿価・償却費・借手費用・貸手収益・連結損益への影響）と一致', () => {
-  const YRS = buildPeriods(ymToIndex('2024-04'), ymToIndex('2040-03'), 3, 'year');
+  const YRS = buildPeriods(ymToIndex('2022-04'), ymToIndex('2050-03'), 3, 'year'); // 最も長い契約（K-012：2047年3月まで）を含む
   // サンプルに加え、初期直接費用のある契約（日本基準）・ASC842 の契約・初期直接費用を資産計上する方針でも確かめる
   const extra = [
     { ...structuredClone(base.contracts.find((c) => c.id === 'K-001')), id: 'T-IDC', lessee: { ...base.contracts.find((c) => c.id === 'K-001').lessee, idc: 1200 } },
@@ -146,8 +147,8 @@ test('月次（発生・累計）：期末月の累計＝年度、各月の累�
   const ytd = buildPeriods(ymToIndex('2027-04'), ymToIndex('2029-03'), 3, 'month_ytd');
   const yr = buildPeriods(ymToIndex('2027-04'), ymToIndex('2029-03'), 3, 'year');
   assert.equal(mo.length, 24); assert.equal(ytd.length, 24);
-  const plOf = (js) => { const m = {}; for (const j of js) for (const l of j.lines) if (['DEP_ROU', 'INT', 'LEASE_INC', 'TAX_ADJ', 'NCI_PL', 'RENTAL_DEP', 'DEP_RECLASS', 'SHORT_COST', 'ASC_COST', 'PRE_RENT', 'TERM_GAIN', 'MOD_GAIN'].includes(l.acc)) { const k = `${l.acc}|${l.co}|${j.contractId}`; m[k] = (m[k] || 0) + l.amt; } for (const k of Object.keys(m)) if (!m[k]) delete m[k]; return m; };
-  const bsOf = (js) => { const m = {}; for (const j of js) for (const l of j.lines) if (!['DEP_ROU', 'INT', 'LEASE_INC', 'TAX_ADJ', 'NCI_PL', 'RENTAL_DEP', 'DEP_RECLASS', 'SHORT_COST', 'ASC_COST', 'PRE_RENT', 'TERM_GAIN', 'MOD_GAIN', 'RE_OPEN'].includes(l.acc)) { const k = `${l.acc}|${l.co}|${j.contractId}`; m[k] = (m[k] || 0) + l.amt; } for (const k of Object.keys(m)) if (!m[k]) delete m[k]; return m; };
+  const plOf = (js) => { const m = {}; for (const j of js) for (const l of j.lines) if (ACCOUNTS[l.acc]?.type === 'PL') { const k = `${l.acc}|${l.co}|${j.contractId}`; m[k] = (m[k] || 0) + l.amt; } for (const k of Object.keys(m)) if (!m[k]) delete m[k]; return m; };
+  const bsOf = (js) => { const m = {}; for (const j of js) for (const l of j.lines) if (ACCOUNTS[l.acc]?.type !== 'PL' && l.acc !== 'RE_OPEN') { const k = `${l.acc}|${l.co}|${j.contractId}`; m[k] = (m[k] || 0) + l.amt; } for (const k of Object.keys(m)) if (!m[k]) delete m[k]; return m; };
   for (let y = 0; y < 2; y++) {
     assert.deepEqual(net(generateAll(base, ytd[y * 12 + 11], pol).journals), net(generateAll(base, yr[y], pol).journals), yr[y].label);
     const sum = {};
@@ -218,7 +219,7 @@ test('会社別の集計：全社の借手の項目の合計＝全契約の合�
     for (const k of ['pay', 'principal', 'int', 'L', 'dep', 'assets', 'liabs', 'lesseeExp', 'inc', 'R', 'cumE', 'plImpact']) assert.equal(r.parts.reduce((a, p) => a + (p[k] || 0), 0), r[k], `${co} ${r.m} ${k}`);
   }
   for (const [m, o] of byM) assert.deepEqual(tot.get(m), o, `月 ${m}`);
-  const YRS = buildPeriods(ymToIndex('2024-04'), ymToIndex('2040-03'), 3, 'year');
+  const YRS = buildPeriods(ymToIndex('2022-04'), ymToIndex('2050-03'), 3, 'year'); // 最も長い契約（K-012：2047年3月まで）を含む
   const s1 = companyMonthly(items, 'S1', pol);
   const y = rollupMonthly(s1, YRS);
   for (const r of y) assert.ok(Number.isFinite(r.pay) && Number.isFinite(r.eChange) && Number.isFinite(r.plImpact), r.label);

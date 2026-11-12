@@ -105,10 +105,15 @@ test('注記：短期リースに係る費用は「短期リース」の契約�
   const k3 = d2.contracts.find((c) => c.id === 'K-003');
   assert.equal(k3.lessee.model, 'offbalance');
   const p = FY[0];
-  const a = groupNoteAmounts(generateAll(d2, p, pol), p, pol, d2.companies).get('L-SHORT').amount;
-  assert.ok(a > 0);
+  const a = groupNoteAmounts(generateAll(d2, p, pol), p, pol, d2.companies).get('L-SHORT');
+  const k3amt = a.rows.filter((x) => x.contract === 'K-003').reduce((s, x) => s + x.amt, 0);
+  assert.ok(k3amt > 0);
+  // 少額リース（K-014・K-025）は含まない
+  assert.ok(!a.rows.some((x) => ['K-014', 'K-025'].includes(x.contract)));
   k3.lessee.offKind = 'low';
-  assert.equal(groupNoteAmounts(generateAll(d2, p, pol), p, pol, d2.companies).get('L-SHORT').amount, 0);
+  const b = groupNoteAmounts(generateAll(d2, p, pol), p, pol, d2.companies).get('L-SHORT');
+  assert.ok(!b.rows.some((x) => x.contract === 'K-003'), '少額リースに変えた契約は含めない');
+  assert.equal(b.amount, a.amount - k3amt);
 });
 
 test('注記：収集表を書き出し、記入して読み込むと、連結の注記額＝各社の合計−グループ内リース分', () => {
