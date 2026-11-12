@@ -75,7 +75,32 @@ export function renderJournals(ctx) {
   ];
   const qMatch = (l) => (qNum !== null ? Math.abs(l.amt) === qNum : accountLabel(l, pol, names).includes(filter.q.trim()));
   const hl = filter.q || filter.company !== 'all' ? (l) => (!filter.q || qMatch(l)) && lineOk(l) : null;
-  const cards = (arr) => h('div', { class: 'journals' }, arr.map((j) => journalCard(j, { pol, names, companies }, { links, actions, hl, notice: (x) => overrideNotice(x, ctx) })));
+  // 仕訳が多いときは最初の60本を表示し、続きは一覧の末尾に近づくと自動で追加する（「続きを表示」ボタンでも可）。
+  // 画面の要素を一度に作らないための工夫で、絞り込み・検索・集計・CSV はすべての仕訳が対象。
+  const BATCH = 60;
+  const cards = (arr) => {
+    const box = h('div', { class: 'journals' });
+    const mk = (j) => journalCard(j, { pol, names, companies }, { links, actions, hl, notice: (x) => overrideNotice(x, ctx) });
+    let shown = 0, io = null;
+    const btn = h('button', { class: 'btn', type: 'button', on: { click: () => more() } });
+    const sentinel = h('div', { class: 'load-more' }, btn);
+    const more = () => {
+      const next = arr.slice(shown, shown + BATCH);
+      shown += next.length;
+      sentinel.remove();
+      box.append(...next.map(mk));
+      if (shown < arr.length) {
+        btn.textContent = `続きを表示（残り ${arr.length - shown}本／全 ${arr.length}本）`;
+        box.append(sentinel);
+      } else if (io) io.disconnect();
+    };
+    more();
+    if (shown < arr.length && typeof IntersectionObserver === 'function') {
+      io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting) && sentinel.isConnected) more(); }, { rootMargin: '800px 0px' });
+      io.observe(sentinel);
+    }
+    return box;
+  };
   const modeNote = { contract: '契約ごとに、内容別の仕訳を表示しています。', company: '内容ごとに、会社（貸手→借手の組合せ。個社修正は会社）単位で合算して表示しています。', total: '内容ごとに、全契約を合算して表示しています。「会社別・契約別の内訳を表示」でドリルダウンできます。' }[filter.mode];
 
   return h('div', { class: 'page' },

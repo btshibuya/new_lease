@@ -391,3 +391,8 @@ td.hl, .hl:not(rect) { fill: initial; }
 /* 画面下の保存バーがある画面では、戻るボタンを保存バーの上に出す */
 body:has(.save-bar) .return-box { bottom: 84px; }
 @media (max-width: 760px) { .return-box { left: 8px; bottom: 8px; padding: 6px 8px; font-size: 12.5px; } body:has(.save-bar) .return-box { bottom: 120px; } }
+
+.load-more { display: flex; justify-content: center; padding: 8px 0; }
+/* 会社名が長くてもプルダウンが画面からはみ出さないように（スマホ幅） */
+label select { max-width: min(100%, calc(100vw - 96px)); }
+label { max-width: 100%; }

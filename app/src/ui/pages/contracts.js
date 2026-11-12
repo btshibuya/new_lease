@@ -2,7 +2,7 @@ import { h, card, table, field, select, statusBadge, toast, amt, ask, download }
 import { toCsv } from '../../engine/data.js';
 import { COLORS, emptyState, kpi } from '../components.js';
 import { gantt, barChart, lineChart } from '../charts.js';
-import { state, update, setUi } from '../store.js';
+import { state, update, setUi, addTestData } from '../store.js';
 import { guard } from '../app.js';
 import { validateContract, currentPortion, periodSummary, paymentPlan } from '../../engine/schedule.js';
 import { sanitizeContract } from '../../engine/data.js';
@@ -66,6 +66,11 @@ export function renderContracts(ctx) {
   const actions = h('div', { class: 'actions' },
     h('button', { class: 'btn btn-primary', type: 'button', on: { click: () => guard(() => { const nc = blankContract(data); update((d) => d.contracts.push(nc), '契約追加', nc.id); setUi({ contractId: nc.id }); }) } }, '＋ 契約を追加'),
     h('button', { class: 'btn', type: 'button', on: { click: () => fileInput.click() } }, 'CSVで一括取込'), fileInput,
+    h('button', { class: 'btn', type: 'button', title: '帳票・速度の確認用に、パターンを網羅したテスト物件（K-008〜K-051・子会社S4〜S6）のうち未登録のものを追加します。登録済みの会社・契約は変更・削除しません', on: { click: () => guard(async () => {
+      if (!(await ask({ title: 'テスト物件を追加しますか？', message: 'パターンを網羅したテスト物件（会社 S4〜S6、契約 K-008〜K-051）のうち、まだ登録されていないものだけを追加します。登録済みの会社・契約は変更・削除しません（同じ番号のものは追加しません）。', okLabel: '追加する' }))) return;
+      const r = addTestData();
+      toast(r.contracts.length || r.companies.length ? `会社 ${r.companies.length}社・契約 ${r.contracts.length}件を追加しました${r.skipped.length ? `（登録済みの ${r.skipped.length}件は追加していません）` : ''}` : 'テスト物件はすべて登録済みです');
+    }) } }, 'テスト物件を追加（未登録分）'),
     h('button', { class: 'btn', type: 'button', on: { click: () => download('契約取込テンプレート.csv', contractTemplateCsv([{ ...data.contracts.find((c) => c.id === 'K-001') || blankContract(data), id: 'K-101', name: '（記入例）この行は削除して入力してください' }]), 'text/csv;charset=utf-8') } }, '取込用テンプレート'),
     data.contracts.length ? h('button', { class: 'btn', type: 'button', on: { click: () => download('契約一覧.csv', contractsToCsv(data.contracts), 'text/csv;charset=utf-8') } }, '登録済みの契約を書き出す') : null,
     h('span', { class: 'spacer' }), filter, count);

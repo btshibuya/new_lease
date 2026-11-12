@@ -2,7 +2,7 @@
 // localStorage が使えない環境（プライベートモード等）でも動作するよう、すべて try/catch で保護する。
 import { sampleData } from '../engine/sample.js';
 
-import { sanitizeData, appendLog, chainHash } from '../engine/data.js';
+import { sanitizeData, appendLog, chainHash, sanitizeCompany, sanitizeContract } from '../engine/data.js';
 import { defaultPolicies, sanitizePolicies } from '../engine/policies.js';
 import { deepClone, indexToYm } from '../engine/util.js';
 
@@ -86,6 +86,27 @@ export function update(mutator, action, detail) {
 export function setUi(patch) {
   Object.assign(state.ui, patch);
   emit(false);
+}
+
+/**
+ * テスト物件（サンプルの会社・契約）のうち、まだ登録されていないものだけを追加する。既存の会社・契約は変更・削除しない。
+ * 同じ会社コード・契約番号がすでにあるものは追加しない（上書きしない）。
+ * @returns {{ companies: string[], contracts: string[], skipped: string[] }}
+ */
+export function addTestData() {
+  const s = sampleData();
+  const codes = new Set(state.data.companies.map((c) => c.code));
+  const ids = new Set(state.data.contracts.map((c) => c.id));
+  const coAdd = s.companies.filter((c) => !codes.has(c.code));
+  const usable = new Set([...codes, ...coAdd.map((c) => c.code)]);
+  const kAdd = s.contracts.filter((c) => !ids.has(c.id) && usable.has(c.lessorCo) && usable.has(c.lesseeCo));
+  const skipped = s.contracts.filter((c) => ids.has(c.id)).map((c) => c.id);
+  if (!coAdd.length && !kAdd.length) return { companies: [], contracts: [], skipped };
+  update((d) => {
+    d.companies.push(...coAdd.map(sanitizeCompany).map((c) => ({ ...c, isParent: false })));
+    d.contracts.push(...kAdd.map(sanitizeContract));
+  }, 'テスト物件の追加', `会社 ${coAdd.map((c) => c.code).join('、') || 'なし'}／契約 ${kAdd.length}件（${kAdd.map((c) => c.id).join('、')}）${skipped.length ? `／登録済みのため追加しない ${skipped.length}件` : ''}`);
+  return { companies: coAdd.map((c) => c.code), contracts: kAdd.map((c) => c.id), skipped };
 }
 
 export function resetSample() {

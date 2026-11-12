@@ -1,6 +1,8 @@
 // サンプルデータ（金額単位：千円）。K-001 は要件定義書 第10章の設例と同一条件。
-// K-008〜K-027 と子会社 S4（持分比率が期中に変動）はテスト用の追加物件（sampleExtra.js）。
+// K-008〜K-027 と子会社 S4（持分比率が期中に変動）はテスト用の追加物件（sampleExtra.js）、
+// K-028〜K-051 と子会社 S5・S6 は第2弾の追加物件（sampleMore.js）。
 import { extraContracts, extraCompany } from './sampleExtra.js';
+import { moreContracts, moreCompanies } from './sampleMore.js';
 
 export function sampleData() {
   return {
@@ -12,6 +14,7 @@ export function sampleData() {
       { code: 'S2', name: '子会社S2（60%・12月決算）', fyeMonth: 12, taxRate: 0.3, nciRatio: 0.4, taxEffect: true, legacyAccounts: true, splitsCurrent: false, currency: 'JPY', adoption: { method: 'cumulative', ym: '2028-01' }, history: [{ fromYm: '2030-04', taxRate: 0.31, nciRatio: 0.4 }] },
       { code: 'S3', name: '在外子会社S3（80%・US GAAP）', fyeMonth: 3, taxRate: 0.27, nciRatio: 0.2, taxEffect: true, currency: 'JPY', adoption: { method: 'applied', ym: '2019-04' } },
       extraCompany(),
+      ...moreCompanies(),
     ],
     contracts: [
       {
@@ -72,6 +75,7 @@ export function sampleData() {
         actuals: {},
       },
       ...extraContracts(),
+      ...moreContracts(),
     ],
     notes: {},
     manualJournals: [],

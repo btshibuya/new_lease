@@ -202,11 +202,18 @@ export function buildSchedule(c, pol = {}, opts = {}) {
     if (ph.idx === 0 && ms.source === 'none' && L.liabilityOverride !== null && L.liabilityOverride !== undefined) L0 = L.liabilityOverride;
     ph.L0 = lesseeOnBalance ? L0 : 0;
     const segs = [];
-    let B = ph.L0, ta = ph.start;
+    // 利息は端数処理しない残高で計算し、累計を端数処理した差を各区間の利息とする（累計で端数処理）。
+    // 区間ごとに丸めると、1区間の利息が0.5未満の少額の契約で利息が毎回0になり、負債が途中で負になって最後にまとめて計上されるため。
+    let B = ph.L0, Bx = ph.L0, cumX = 0, cumR = 0, ta = ph.start;
     for (const p of ph.rem) {
       const len = p.t - ta;
-      segs.push({ ta, tb: p.t, base: B, interest: len > 0 ? R(B * ph.seg(len)) : 0, pay: p });
-      B = B + segs[segs.length - 1].interest - p.amount;
+      const ix = len > 0 ? Bx * ph.seg(len) : 0;
+      cumX += ix;
+      const interest = R(cumX) - cumR;
+      cumR += interest;
+      segs.push({ ta, tb: p.t, base: B, interest, pay: p });
+      B = B + interest - p.amount;
+      Bx = Bx + ix - p.amount;
       ta = p.t;
     }
     ph.finalResidual = ph.rem.length ? B : 0;
