@@ -1,4 +1,5 @@
 import { h, card, toast, ask } from '../dom.js';
+import { lineChart } from '../charts.js';
 import { update, state, setUi } from '../store.js';
 import { sanitizeCompany, validCode } from '../../engine/data.js';
 import { deepClone, indexToJp, ymToIndex } from '../../engine/util.js';
@@ -121,7 +122,18 @@ function ownershipCard(data) {
       }));
     };
     draw();
-    return h('details', { id: `own-${c.code}`, open: c.ownership.length > 0 }, h('summary', null, h('b', null, `${c.code} ${c.name}`), summary),
+    // 保存済みの推移のグラフ（月ごとの親会社持分比率・非支配株主持分比率。みなし日の翌月から変わる）
+    const saved = data.companies.find((x) => x.code === c.code);
+    let chart = null;
+    if ((saved.ownership || []).length) {
+      const st = ownershipSteps(saved);
+      const from = st[0].fromIdx, to = st[st.length - 1].fromIdx + 12; // 支配獲得（最初の取得の適用開始月）から
+      const months = Array.from({ length: to - from + 1 }, (_, i) => from + i);
+      const lab = (i) => `${String(Math.floor(i / 12)).slice(2)}/${(i % 12) + 1}`;
+      chart = lineChart({ wide: true, height: 220, title: `${c.code} の持分比率の推移（％、月次）`, subtitle: `異動日とみなし日：${st.map((x) => `${x.rec.date}（${OWN_KINDS[x.rec.kind] || ''}）→ みなし日 ${indexToJp(x.deemedIdx)}末・${indexToJp(x.fromIdx)}から ${pctTxt(x.parent)}`).join('、')}`, labels: months.map(lab),
+        series: [{ name: '親会社持分比率', values: months.map((m) => Math.round((1 - rateAt(saved, m, 'nciRatio')) * 1000) / 10), color: 'var(--s1)' }, { name: '非支配株主持分比率', values: months.map((m) => Math.round(rateAt(saved, m, 'nciRatio') * 1000) / 10), color: 'var(--s2)', dashed: true }], unit: '％' });
+    }
+    return h('details', { id: `own-${c.code}`, open: c.ownership.length > 0 }, h('summary', null, h('b', null, `${c.code} ${c.name}`), summary), chart,
       h('div', { class: 'tbl-wrap' }, h('table', { class: 'tbl compact form-table' }, h('thead', null, h('tr', null, ['異動日', '種類', '異動後の親会社持分比率（％）', '非支配株主持分比率', 'みなし日', '新しい比率を使う月', '備考', ''].map((t) => h('th', null, t)))), body)),
       h('div', { class: 'actions' },
         h('button', { class: 'btn', type: 'button', on: { click: () => { const last = c.ownership[c.ownership.length - 1]; c.ownership.push({ date: '', kind: c.ownership.length ? 'add' : 'acquire', ratio: last ? last.ratio : 1, deemed: 'nearest_month_end', memo: '' }); draw(); } } }, '＋ 異動を追加'),

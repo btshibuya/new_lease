@@ -326,7 +326,7 @@ const RELATED = {
   'C-11': ['contract', 'pol:POL-04'],
   'C-12': ['contract', 'pol:POL-05'],
   'C-13': ['tax', 'coTax', 'pol:POL-02', 'check:CHK-11'],
-  'C-14': ['nci', 'coNci', 'pol:POL-01', 'check:CHK-11'],
+  'C-14': ['nci', 'coNci', 'pol:POL-01', 'check:CHK-11', 'check:CHK-19'],
   'IND-01': ['coLegacy', 'contract'],
   'IND-02': ['coLegacy', 'yearly'],
 };
@@ -350,7 +350,13 @@ export function relatedCandidates(j, ctx) {
     else if (k === 'tax') out.push({ title: '税効果のプルーフ', desc: '会社別の純資産修正額 × 法定実効税率（期首・期末）', page: 'worksheet', target: 'tax-proof' });
     else if (k === 'nci') out.push({ title: '非支配株主持分のプルーフ', desc: '税効果後の修正額 × 借手の非支配株主持分比率', page: 'worksheet', target: 'nci-proof' });
     else if (k === 'coTax') out.push({ title: '会社マスタ：法定実効税率・繰延税金資産の計上割合', page: 'companies', label: '法定実効税率（％）' });
-    else if (k === 'coNci') out.push({ title: '会社マスタ：非支配株主持分比率', page: 'companies', label: '非支配株主持分比率（％）' });
+    else if (k === 'coNci') {
+      // 持分比率の推移（異動日つき）がある借手は、その推移へ。ない場合は会社マスタの比率へ
+      const lessees = [...new Set((j.parts || [j]).map((p) => p.lesseeCo).filter(Boolean))];
+      const withOwn = lessees.filter((code) => (ctx.companies.find((c) => c.code === code)?.ownership || []).length);
+      for (const code of withOwn) out.push({ title: `会社マスタ：${code} の持分比率の推移`, desc: '異動日・みなし日・期中の比率（グラフ）', page: 'companies', target: `own-${code}` });
+      if (withOwn.length < lessees.length || !lessees.length) out.push({ title: '会社マスタ：非支配株主持分比率', page: 'companies', label: '非支配株主持分比率（％）' });
+    }
     else if (k === 'coLegacy') out.push({ title: '会社マスタ：旧科目名・流動区分', page: 'companies', label: '旧科目名を使用' });
     else if (k.startsWith('pol:')) out.push({ title: `会計方針 ${k.slice(4)}`, desc: '選択肢と根拠', page: 'policies', target: k.slice(4) });
     else if (k.startsWith('check:')) out.push({ title: `検算 ${k.slice(6)}`, desc: '独立計算との比較', page: 'checks', target: k.slice(6) });

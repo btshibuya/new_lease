@@ -12,8 +12,10 @@ const view = { gran: 'kind', company: 'all' };
 // 会社で抽出：その会社の行だけ（'CONSOL' は会社に属さない組替の行）
 const coOk = (l) => view.company === 'all' || l.co === view.company;
 const GRANS = [['kind', '区分別（個社修正・連結修正）'], ['content_open', '内容別（開始仕訳はまとめる）'], ['content', '内容別（開始仕訳も内容別）']];
-import { ACCOUNTS, accountLabel } from '../../engine/accounts.js';
-import { TEMPLATES, generateAll, carryModeOf, CARRY_DEFS } from '../../engine/elimination.js';
+import { ACCOUNTS, accountLabel, rateAt } from '../../engine/accounts.js';
+import { round } from '../../engine/util.js';
+import { TEMPLATES, generateAll, carryModeOf, CARRY_DEFS, nciSegments, nciBase } from '../../engine/elimination.js';
+import { goTo } from '../nav.js';
 import { toCsv } from '../../engine/data.js';
 import { fmt, indexToJp } from '../../engine/util.js';
 
@@ -269,6 +271,7 @@ function renderRollforward(ctx) {
 function renderProofs(ctx) {
   const { gen, companies, pol, period } = ctx;
   const coName = (code) => companies.find((c) => c.code === code)?.name || code;
+  const coMap = Object.fromEntries(companies.map((c) => [c.code, c]));
   const pct = (v) => `${(v * 100).toFixed(2)}%`;
   const sumAcc = (cid, co, acc) => gen.journals.filter((j) => j.contractId === cid).flatMap((j) => j.lines).filter((l) => l.co === co && l.acc === acc).reduce((a, l) => a + l.amt, 0);
   const taxRows = [], nciRows = [];
@@ -281,8 +284,52 @@ function renderProofs(ctx) {
     }
     const L = c.lesseeCo;
     if (view.company !== 'all' && view.company !== L) continue;
-    if (r.NCI.open[L] || r.NCI.close[L] || r.cap.close) nciRows.push({ contract: c.id, co: coName(L), no: r.NCI.open[L] || 0, ro: pct(r.rates.nO[L] || 0), nc: r.NCI.close[L] || 0, rc: pct(r.rates.nC[L] || 0), cap: (r.cap.close || 0) - (r.cap.open || 0), chg: (r.NCI.close[L] || 0) - (r.NCI.open[L] || 0), jr: -gen.journals.filter((j) => j.contractId === c.id).flatMap((j) => j.lines).filter((l) => l.co === L && l.acc === 'NCI' && true).reduce((a, l) => a + l.amt, 0) - (r.NCI.open[L] || 0) });
+    if (r.NCI.open[L] || r.NCI.close[L] || r.cap.close) {
+      const c14 = gen.journals.filter((j) => j.contractId === c.id && j.tpl === 'C-14').flatMap((j) => j.lines).filter((l) => l.co === L);
+      nciRows.push({ contract: c.id, lessee: L, r, co: coName(L), no: r.NCI.open[L] || 0, ro: pct(r.rates.nO[L] || 0), nc: r.NCI.close[L] || 0, rc: pct(r.rates.nC[L] || 0), cap: (r.cap.close || 0) - (r.cap.open || 0), chg: (r.NCI.close[L] || 0) - (r.NCI.open[L] || 0),
+        pl: c14.filter((l) => l.acc === 'NCI_PL').reduce((a, l) => a + l.amt, 0), trans: c14.filter((l) => l.acc === 'RE_OPEN').reduce((a, l) => a + l.amt, 0),
+        sg: nciSegments(r.sched, coMap, pol, period.start, period.end),
+        jr: -gen.journals.filter((j) => j.contractId === c.id).flatMap((j) => j.lines).filter((l) => l.co === L && l.acc === 'NCI' && true).reduce((a, l) => a + l.amt, 0) - (r.NCI.open[L] || 0) });
+    }
   }
+  // ── 期中の持分比率の変動：区間ごとの按分（計算の確認・会社別の集計） ──
+  const ym = (i) => indexToJp(i);
+  const span = (x) => (x.from === x.to ? ym(x.from) : `${ym(x.from)}〜${ym(x.to)}`);
+  const ownLinks = (code) => [
+    { label: `会社 ${code} の持分比率の推移`, go: () => goTo({ page: 'companies', target: `own-${code}` }) },
+    { label: '検算 CHK-19（持分比率の推移）', go: () => goTo({ page: 'checks' }) },
+  ];
+  const monthlyInfo = (x) => () => {
+    const R = (v) => round(v, pol['POL-11'] || 'half_up');
+    const rows = [];
+    for (let t = period.start; t <= period.end; t++) {
+      const n = rateAt(coMap[x.lessee], t, 'nciRatio'), b0 = nciBase(x.r.sched, coMap, pol, t - 1, R), b1 = nciBase(x.r.sched, coMap, pol, t, R);
+      rows.push({ ym: ym(t), n: pct(n), b0, b1, d: b1 - b0, a: n * (b1 - b0) });
+    }
+    const sum = rows.reduce((a, y) => a + y.a, 0);
+    const dec = (v) => (v < 0 ? `△${Math.abs(v).toFixed(2)}` : v.toFixed(2)); // 端数処理前の額は小数2桁で示す
+    for (const y of rows) y.aTxt = dec(y.a);
+    return { context: `非支配株主持分のプルーフ・${period.label}`, title: `${x.contract}：月ごとの按分（基礎の増減 × その月の比率）`, value: dec(sum),
+      breakdown: { title: `月ごとの内訳（${rows.length}か月）`, cols: [{ label: '年月', key: 'ym' }, { label: '比率', key: 'n' }, { label: '前月末の基礎', key: 'b0', num: true }, { label: '月末の基礎', key: 'b1', num: true }, { label: '基礎の増減', key: 'd', num: true }, { label: '按分額（端数処理前）', key: 'aTxt' }], rows: [...rows, { ym: '合計', n: '', b0: null, b1: null, d: rows.reduce((a, y) => a + y.d, 0), aTxt: `${dec(sum)}（仕訳 ${fmt(x.pl + x.trans)}）`, total: true }] },
+      notes: ['仕訳は比率が同じ区間ごとに「期末の基礎×比率」と「期首の基礎×比率」をそれぞれ端数処理して差を取るため、この月ごとの合計（端数処理前）とは端数の範囲で異なることがあります。', '基礎＝借手・貸手の純資産修正額の合計から税効果を控除した額（月末）。'],
+      sources: [{ label: '返済・償却スケジュール（月次）' }], links: ownLinks(x.lessee) };
+  };
+  const plInfo = (x) => () => ({
+    context: `非支配株主持分のプルーフ・${period.label}`, title: `${x.contract}：当期の非支配株主帰属額（${x.co}）`, value: x.pl,
+    formula: [...x.sg.segments.flatMap((y, i) => [...(i ? ['＋'] : []), { label: `${span(y)} × ${pct(y.n)}`, value: y.amt }]), ...(x.trans ? ['−', { label: '適用時の累積的影響額分（期首利益剰余金）', value: x.trans }] : [])],
+    expr: `${x.sg.segments.map((y) => fmt(y.amt)).join(' ＋ ')}${x.trans ? ` − ${fmt(x.trans)}` : ''} ＝ ${fmt(x.pl)}`,
+    breakdown: { title: `比率が同じ区間ごとの按分（${x.sg.segments.length}区間）`, cols: [{ label: '区間', key: 'span' }, { label: '非支配株主持分比率', key: 'n' }, { label: '区間の期首の基礎', key: 'b0', num: true }, { label: '区間の期末の基礎', key: 'b1', num: true }, { label: '按分額', key: 'amt', num: true }], rows: [...x.sg.segments.map((y) => ({ span: span(y), n: pct(y.n), b0: y.b0, b1: y.b1, amt: y.amt })), { span: '合計', n: '', b0: null, b1: null, amt: x.sg.segments.reduce((a, y) => a + y.amt, 0), total: true }] },
+    notes: ['区間ごとの按分額＝期末の基礎×比率（端数処理）−期首の基礎×比率（端数処理）。持分比率はみなし日の翌月から変わります。', ...(x.sg.changes.length ? [`期中の比率の変更：${x.sg.changes.map((y) => `${ym(y.at)}から ${pct(y.n0)}→${pct(y.n1)}`).join('、')}（変更による按分替えは資本剰余金。「うち持分変動」の金額を押すと内訳を表示）`] : [])],
+    more: [{ label: '月ごとの内訳を見る', desc: '各月の基礎の増減×その月の比率（端数処理前）', open: monthlyInfo(x) }],
+    sources: [{ label: '仕訳 C-14' }], links: ownLinks(x.lessee),
+  });
+  const capInfo = (x) => () => ({
+    context: `非支配株主持分のプルーフ・${period.label}`, title: `${x.contract}：持分変動による按分替え（資本剰余金）`, value: x.cap,
+    breakdown: { title: `比率が変わった月（${x.sg.changes.length}回）`, cols: [{ label: '新しい比率を使う月', key: 'at' }, { label: '前月末の基礎', key: 'base', num: true }, { label: '変更前の比率', key: 'n0' }, { label: '変更後の比率', key: 'n1' }, { label: '持分変動', key: 'cap', num: true }], rows: [...x.sg.changes.map((y) => ({ at: ym(y.at), base: y.base, n0: pct(y.n0), n1: pct(y.n1), cap: y.cap })), { at: '合計', base: null, n0: '', n1: '', cap: x.sg.changes.reduce((a, y) => a + y.cap, 0), total: true }] },
+    notes: ['持分変動＝変更月の前月末の基礎×変更後の比率（端数処理）−同×変更前の比率（端数処理）。親会社の持分が変わる資本取引のため、損益ではなく資本剰余金で処理します（会計方針 POL-14）。'],
+    sources: [{ label: '仕訳 C-14' }], links: ownLinks(x.lessee),
+  });
+  const pathTxt = (x) => (x.sg.segments.length > 1 ? x.sg.segments.map((y) => `${pct(y.n)}（${span(y)}）`).join('→') : x.sg.changes.length ? `${pct(x.sg.changes[0].n0)}→${pct(x.sg.segments[0]?.n ?? 0)}（期首）` : '期中の変更なし');
   const tot = (rows, f) => rows.reduce((a, x) => a + (x[f] || 0), 0);
   const judge = (x) => h('td', null, x.chg === x.jr ? statusBadge('ok', '一致') : statusBadge('warn', `差 ${fmt(x.jr - x.chg)}`));
   const taxTbl = table([
@@ -295,15 +342,34 @@ function renderProofs(ctx) {
     { label: '契約', key: 'contract', nowrap: true }, { label: '借手の会社', key: 'co' },
     { label: '期首の非支配株主持分', key: 'no', num: true }, { label: '期首の比率', key: 'ro' },
     { label: '期末の非支配株主持分', key: 'nc', num: true }, { label: '期末の比率', key: 'rc' },
-    { label: 'うち持分変動（資本剰余金）', key: 'cap', num: true }, { label: '当期の増減（期末−期首）', key: 'chg', num: true }, { label: '仕訳（非支配株主持分の増減）', key: 'jr', num: true }, { label: '判定', render: judge },
-  ], [...nciRows, { contract: '合計', co: '', no: tot(nciRows, 'no'), ro: '', nc: tot(nciRows, 'nc'), rc: '', cap: tot(nciRows, 'cap'), chg: tot(nciRows, 'chg'), jr: tot(nciRows, 'jr'), total: true }], { rowClass: (x) => (x.total ? 'total' : '') });
+    { label: '期中の比率（区間）', render: (x) => h('td', { class: 'small' }, x.total ? '' : pathTxt(x)) },
+    { label: '当期の非支配株主帰属額（損益）', render: (x) => amt(x.pl, { calc: x.total ? null : plInfo(x) }) },
+    { label: 'うち持分変動（資本剰余金）', render: (x) => amt(x.cap, { calc: x.total || !x.sg.changes.length ? null : capInfo(x) }) }, { label: '当期の増減（期末−期首）', key: 'chg', num: true }, { label: '仕訳（非支配株主持分の増減）', key: 'jr', num: true }, { label: '判定', render: judge },
+  ], [...nciRows, { contract: '合計', co: '', no: tot(nciRows, 'no'), ro: '', nc: tot(nciRows, 'nc'), rc: '', pl: tot(nciRows, 'pl'), cap: tot(nciRows, 'cap'), chg: tot(nciRows, 'chg'), jr: tot(nciRows, 'jr'), total: true }], { rowClass: (x) => (x.total ? 'total' : '') });
+  // 会社別：比率が同じ区間ごとの基礎の増減・按分額（全契約の合計）と、仕訳の非支配株主帰属額との一致
+  const byCo = new Map();
+  for (const x of nciRows) {
+    const g = byCo.get(x.lessee) || byCo.set(x.lessee, { seg: new Map(), ch: new Map(), pl: 0, trans: 0 }).get(x.lessee);
+    g.pl += x.pl; g.trans += x.trans;
+    for (const y of x.sg.segments) { const k = `${y.from}-${y.to}`; const o = g.seg.get(k) || g.seg.set(k, { span: span(y), n: y.n, db: 0, amt: 0 }).get(k); o.db += y.b1 - y.b0; o.amt += y.amt; }
+    for (const y of x.sg.changes) { const o = g.ch.get(y.at) || g.ch.set(y.at, { at: y.at, n0: y.n0, n1: y.n1, base: 0, cap: 0 }).get(y.at); o.base += y.base; o.cap += y.cap; }
+  }
+  const coSegTbl = byCo.size ? h('div', null, h('h3', null, '会社別：持分比率が同じ区間ごとの按分（全契約の合計）'),
+    ...[...byCo].map(([code, g]) => {
+      const segSum = [...g.seg.values()].reduce((a, y) => a + y.amt, 0);
+      const ok = segSum - g.trans === g.pl;
+      return h('div', { class: 'own-seg' }, h('div', { class: 'row' }, h('b', null, `${code} ${coName(code)}`), ' ', h('button', { class: 'btn-link', type: 'button', on: { click: () => goTo({ page: 'companies', target: `own-${code}` }) } }, '持分比率の推移を見る'), ' ', ok ? statusBadge('ok', '区間の合計＝仕訳の非支配株主帰属額') : statusBadge('ng', `差 ${fmt(g.pl - (segSum - g.trans))}`)),
+        table([{ label: '区間', key: 'span' }, { label: '非支配株主持分比率', render: (y) => h('td', null, y.total || y.n === null ? '' : pct(y.n)) }, { label: '基礎の増減', key: 'db', num: true }, { label: '按分額（＝基礎の増減×比率。契約ごとに端数処理）', key: 'amt', num: true }],
+          [...g.seg.values(), ...(g.trans ? [{ span: '適用時の累積的影響額分（期首利益剰余金へ）', n: null, db: null, amt: -g.trans, total: false }] : []), { span: '当期の非支配株主帰属額（仕訳 C-14）', n: 0, db: [...g.seg.values()].reduce((a, y) => a + y.db, 0), amt: g.pl, total: true }], { className: 'compact', rowClass: (y) => (y.total ? 'total' : '') }),
+        g.ch.size ? table([{ label: '持分比率の変更', render: (y) => h('td', null, `${ym(y.at)}から ${pct(y.n0)}→${pct(y.n1)}`) }, { label: '前月末の基礎', key: 'base', num: true }, { label: '持分変動（資本剰余金）', key: 'cap', num: true }], [...g.ch.values()], { className: 'compact' }) : null);
+    })) : null;
   return [
     h('section', { class: 'card', id: 'tax-proof' }, h('h2', null, `税効果のプルーフ（${period.label}）`),
       h('div', { class: 'alert alert-info' }, `個別で計上した税効果の取消額＝会社別の純資産修正額（消去による連結上の純資産の増減）× 法定実効税率（繰延税金資産の側は計上割合を反映）。当期の法人税等調整額＝期末の取消額−期首の取消額（税率変更の影響を含む）。会計方針 POL-02：${pol['POL-02'] === 'reverse' ? '個別税効果を取り消す' : '税効果を認識しない'}。`),
       taxRows.length ? taxTbl : h('p', { class: 'muted' }, '税効果の取消はありません。')),
     h('section', { class: 'card', id: 'nci-proof' }, h('h2', null, `非支配株主持分のプルーフ（${period.label}）`),
       h('div', { class: 'alert alert-info' }, `非支配株主持分＝（借手・貸手の税効果後の修正額の合計）× 借手の非支配株主持分比率。比率の変動による按分替えは資本剰余金（資本取引）。会計方針 POL-01：${pol['POL-01'] === 'allocate' ? '借手の比率で按分する' : '按分しない'}。`),
-      nciRows.length ? nciTbl : h('p', { class: 'muted' }, '非支配株主持分への按分はありません。')),
+      nciRows.length ? h('div', null, coSegTbl, h('h3', null, '契約別'), nciTbl) : h('p', { class: 'muted' }, '非支配株主持分への按分はありません。')),
   ];
 }
 
