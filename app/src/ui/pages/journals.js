@@ -347,6 +347,7 @@ const RELATED = {
   'C-04': ['contract', 'yearly', 'monthly', 'pay', 'pol:POL-09'],
   'C-17': ['contract', 'monthly'],
   'C-20': ['mods', 'contract', 'monthly'],
+  'C-21': ['contract', 'monthly', 'pol:POL-05', 'check:CHK-02', 'check:CHK-05'],
   'C-10': ['yearly', 'pay', 'check:CHK-14'],
   'C-11': ['contract', 'pol:POL-04'],
   'C-12': ['contract', 'pol:POL-05'],

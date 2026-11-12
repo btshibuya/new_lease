@@ -18,6 +18,7 @@ export const TEMPLATES = {
   'C-04': { kind: 'CON', title: 'リース料（利息・元本返済・受取リース料）の消去' },
   'C-17': { kind: 'CON', title: '解約・満了時の取崩し・違約金の消去' },
   'C-20': { kind: 'CON', title: '条件変更・再測定の消去' },
+  'C-21': { kind: 'CON', title: '貸手のファイナンス・リースの消去（リース投資資産→連結上の自己所有資産）' },
   'C-10': { kind: 'CON', title: 'リース負債の流動・固定組替（消去）' },
   'C-11': { kind: 'CON', title: '貸手資産の表示組替（連結上の自己使用資産）' },
   'C-12': { kind: 'CON', title: '貸手減価償却費の表示組替（借手の使用部門）' },
@@ -43,6 +44,7 @@ export const CARRY_DEFS = [
   { tpl: 'C-03', default: 'carry', re: true, why: '減価償却費の取消は損益に影響し、その累計は翌期の利益剰余金期首になります。' },
   { tpl: 'C-04', default: 'carry', re: true, why: 'リース負債に係る利息費用・受取リース料の取消は損益に影響し、その累計は翌期の利益剰余金期首になります。' },
   { tpl: 'C-20', default: 'carry', re: true, why: '条件変更の損益の取消は、翌期の利益剰余金期首に影響します。' },
+  { tpl: 'C-21', default: 'carry', re: true, why: '貸手が所有権移転外ファイナンス・リースとした物件を連結上の自己所有資産に戻し、減価償却を続けます。償却費は損益に影響し、資産・累計額の残高を引き継ぐ必要があります。' },
   { tpl: 'C-17', default: 'carry', re: true, why: '解約損益・違約金の取消は、翌期の利益剰余金期首に影響します。' },
   { tpl: 'C-13', default: 'carry', re: true, why: '法人税等調整額は損益に影響し、繰延税金資産（負債）の残高を引き継ぐ必要があります。' },
   { tpl: 'C-14', default: 'carry', re: true, why: '非支配株主に帰属する損益は、翌期の利益剰余金期首・非支配株主持分に影響します。' },
@@ -151,7 +153,12 @@ export function monthReversals(rec, sched, pol) {
 
   // 支払（借手）と受取（貸手）：現金は連結グループ内で相殺されるため、相手勘定どうしを消去
   if (lo.cash) {
-    if (le.active && (model === 'jgaap' || model === 'asc842ol')) {
+    if (lo.fl) {
+      out.push({ tpl: 'C-04', lines: [
+        ln('LEASE_INV', lessorCo, lo.cash, meta, `貸手の回収 ${fmt(lo.cash)}（リース投資資産の減少）の取消`),
+        ln('LL_NC', lesseeCo, -lo.cash, meta, `借手の支払 ${fmt(lo.cash)}（リース負債の減少）の取消`),
+      ], note: `${when} リース料の支払・回収の取消（現金は連結上相殺）` });
+    } else if (le.active && (model === 'jgaap' || model === 'asc842ol')) {
       out.push({ tpl: 'C-04', lines: [
         ln('ACCR_INC', lessorCo, lo.cash, meta, `貸手の入金 ${fmt(lo.cash)}（未収リース料の減少）の取消`),
         ln('LL_NC', lesseeCo, -lo.cash, meta, `借手の支払 ${fmt(lo.cash)}（リース負債の減少）の取消`),
@@ -168,7 +175,31 @@ export function monthReversals(rec, sched, pol) {
       ], note: `${when} 適用開始前の支払リース料の取消` });
     }
   }
-  if (lo.inc) {
+  if (lo.fl) {
+    const r = c.lessor || {};
+    if (lo.inc) out.push({ tpl: 'C-04', lines: [
+      ln('LEASE_INT_INC', lessorCo, lo.inc, meta, `貸手の利息相当額（受取利息）${fmt(lo.inc)}＝リース投資資産 × 計算利子率（年 ${pct(sched.meta.flRate)}、月複利）を各月に配分（累計で端数処理${lo.flEnd ? '。最終月は返還前の残高を見積残存価額に一致させる端数調整を含む' : ''}）`),
+      ln('LEASE_INV', lessorCo, -lo.inc, meta, '利息相当額によるリース投資資産の増加の取消'),
+    ], note: `${when} 貸手の受取利息（リース投資資産）の取消` });
+    if (lo.flStart) out.push({ tpl: 'C-21', lines: [
+      ln('RENTAL_ASSET', lessorCo, lo.flStart.cost, meta, `貸手が除却した物件の取得原価 ${fmt(lo.flStart.cost)} を連結上の自己所有資産に戻す`),
+      ln('RENTAL_ACC', lessorCo, -lo.flStart.acc, meta, `リース開始時までの減価償却累計額 ${fmt(lo.flStart.acc)}`),
+      ln('LEASE_INV', lessorCo, -lo.flStart.NI0, meta, `貸手が計上したリース投資資産 ${fmt(lo.flStart.NI0)}（貸手の購入価額等＝物件の帳簿価額）の取消`),
+    ], note: `${when} 貸手のファイナンス・リース開始（物件の除却・リース投資資産の計上）の取消` });
+    if (lo.assetDep) {
+      const byDept = pol['POL-05'] === 'by_lessee_dept';
+      out.push({ tpl: 'C-21', lines: [
+        byDept ? ln('DEP_RECLASS', 'CONSOL', lo.assetDep, meta, `連結上の自己所有資産の減価償却費（借手の使用部門・POL-05）＝取得原価 ${fmt(r.assetCost)} ÷ 耐用年数 ${r.assetLifeMonths}か月（累計で端数処理）`)
+          : ln('RENTAL_DEP', lessorCo, lo.assetDep, meta, `連結上の自己所有資産の減価償却費（貸手の区分）＝取得原価 ${fmt(r.assetCost)} ÷ 耐用年数 ${r.assetLifeMonths}か月（累計で端数処理）`),
+        ln('RENTAL_ACC', lessorCo, -lo.assetDep, meta, '連結上の減価償却累計額'),
+      ], note: `${when} 連結上の自己所有資産の減価償却（貸手は個別で償却しない）` });
+    }
+    if (lo.flEnd) out.push({ tpl: 'C-21', lines: [
+      ln('RENTAL_ASSET', lessorCo, -(r.assetCost || 0), meta, 'リース期間の終了：貸手は物件の返還を受け、見積残存価額（＝連結上の帳簿価額）で計上するため、連結上戻した資産を取り消す'),
+      ln('RENTAL_ACC', lessorCo, lo.assetAcc_end, meta, `連結上の減価償却累計額 ${fmt(lo.assetAcc_end)} の取消`),
+      ln('LEASE_INV', lessorCo, lo.flEnd.residual, meta, `返還前のリース投資資産（見積残存価額 ${fmt(lo.flEnd.residual)}）の取消の戻し`),
+    ], note: `${when} リース期間の終了（物件の返還）` });
+  } else if (lo.inc) {
     out.push({ tpl: 'C-04', lines: [
       ln('LEASE_INC', lessorCo, lo.inc, meta, lo.termAdj ? `受取リース料（定額）${fmt(lo.inc - lo.termAdj)}、解約に伴う未収の取崩 ${fmt(lo.termAdj)}` : '受取リース料（定額法：収益認識区間のリース料総額 ÷ 区間の月数。区間は開始・条件変更（新たなリース）・貸手のリース期間の終了で区切る）'),
       ln('ACCR_INC', lessorCo, -lo.inc, meta, '貸手の収益計上（未収リース料）の取消'),
@@ -461,7 +492,7 @@ export function contractJournals(c, period, ctx) {
   const c10 = c10At(period.end);
   const c11 = c11At(period.end);
   const c12 = [];
-  if (pol['POL-05'] === 'by_lessee_dept' && r.assetCost > 0) {
+  if (pol['POL-05'] === 'by_lessee_dept' && r.assetCost > 0 && sched.meta.lessorModel !== 'finance') {
     const act = sched.months.filter((x) => x.m >= period.start && x.m <= period.end && x.m >= sched.meta.start);
     const dep = lessorDepBetween(sched, period.start, period.end, ratio, R); // 累計を丸めた差（区切りによらず合計が一致）
     if (dep) {
@@ -499,7 +530,7 @@ export function contractJournals(c, period, ctx) {
     }
     const openMk = (tpl, src, lines) => mk(tpl, lines, { src, id: `${period.label}-${c.id}-${tpl}-${src}`, title: `開始仕訳：${TEMPLATES[src].title}` });
     const revMk = (src, lines) => mk('C-01R', lines, { src, id: `${period.label}-${c.id}-C-01R-${src}`, title: `洗替：${TEMPLATES[src].title}（前期末の開始仕訳の戻し）` });
-    for (const tpl of ['C-02', 'C-03', 'C-04', 'C-20', 'C-17']) {
+    for (const tpl of ['C-02', 'C-03', 'C-04', 'C-20', 'C-21', 'C-17']) {
       const P = cumBefore.filter((l) => l.tpl === tpl);
       const Q = byTpl[tpl] || [];
       const mode = carryModeOf(carryCfg, tpl);
@@ -634,7 +665,7 @@ export function openingTrace(r, j, yearPeriods, pol, companies) {
   const add = (year, co, acc, amt, note) => { if (amt) out.push({ year, co, acc, amt, note }); };
   const src = j.src;
   const meta = metaOf(r.contract);
-  if (['C-02', 'C-03', 'C-04', 'C-20', 'C-17'].includes(src)) {
+  if (['C-02', 'C-03', 'C-04', 'C-20', 'C-21', 'C-17'].includes(src)) {
     const lines = r.cumBefore.filter((l) => l.tpl === src && isBS(l.acc));
     const groups = new Map();
     for (const l of lines) { const y = yearOf(l.m)?.label || '（表示期間より前）'; (groups.get(y) || groups.set(y, []).get(y)).push(l); }

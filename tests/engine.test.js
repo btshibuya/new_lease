@@ -170,11 +170,11 @@ test('当初の7契約・全会計方針の組合せ・年度/四半期で検算
   assert.ok(noNg(d7, allCombos(), periods) > 1000);
 });
 
-test('サンプルの全契約（51件）・会計方針の2因子網羅（どの2つの方針の選択肢の組も含む）・年度/四半期/月次で検算NGがない', () => {
+test('サンプルの全契約（52件）・会計方針の2因子網羅（どの2つの方針の選択肢の組も含む）・年度/四半期/月次で検算NGがない', () => {
   const periods = [...buildPeriods(ymToIndex('2027-04'), ymToIndex('2034-03'), 3), ...buildPeriods(ymToIndex('2027-04'), ymToIndex('2030-03'), 3, 'quarter'), ...buildPeriods(ymToIndex('2029-04'), ymToIndex('2030-03'), 3, 'month')];
   const combos = pairwiseCombos();
   assert.ok(combos.length >= 6 && combos.length < allCombos().length / 10, `組合せ ${combos.length}`);
-  assert.equal(data.contracts.length, 51);
+  assert.equal(data.contracts.length, 52);
   noNg(data, combos, periods);
 });
 

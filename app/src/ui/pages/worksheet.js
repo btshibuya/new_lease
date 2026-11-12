@@ -500,5 +500,5 @@ function renderNotes(ctx) {
       h('span', { class: 'muted' }, collected ? `収集済み：${collected}社／${companies.length}社` : '収集値はまだありません（各社の注記額の列は「未収集」）')),
     statusTable(),
     tableEl,
-    barChart({ wide: true, title: '決算日後の期間別：グループ内の借手のリース料と貸手の受取リース料', subtitle: '同じ契約の支払と受取のため、借手の短期・少額リース等や貸手のリース期間の違いを除けばほぼ一致します', labels: BUCKETS.map((b) => b.label), series: [{ name: '借手：リース負債の返済予定額（割引前）', values: mat('X-LL'), color: COLORS.lessee }, { name: '借手：元本', values: mat('X-LLP'), color: 'var(--s5)' }, { name: '貸手：リース料の回収予定額', values: mat('R-MAT'), color: COLORS.lessor }], unit, height: 240 }));
+    barChart({ wide: true, title: '決算日後の期間別：グループ内の借手のリース料と貸手の受取リース料', subtitle: '同じ契約の支払と受取のため、借手の短期・少額リース等や貸手のリース期間の違いを除けばほぼ一致します', labels: BUCKETS.map((b) => b.label), series: [{ name: '借手：リース負債の返済予定額（割引前）', values: mat('X-LL'), color: COLORS.lessee }, { name: '借手：元本', values: mat('X-LLP'), color: 'var(--s5)' }, { name: '貸手：リース料の回収予定額（オペレーティング＋ファイナンス）', values: mat('R-MAT').map((v, i) => v + mat('R-FMAT')[i]), color: COLORS.lessor }], unit, height: 240 }));
 }

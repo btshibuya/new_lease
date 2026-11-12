@@ -15,7 +15,7 @@ function item(id, title, status, detail, rows = [], independence = '') {
   return { id, title, status, detail, rows, independence };
 }
 
-const FLOW_TPLS = new Set(['C-01', 'C-02', 'C-03', 'C-04', 'C-20', 'C-17', 'C-B']); // 開始仕訳・洗替は src（元の内容）で判定
+const FLOW_TPLS = new Set(['C-01', 'C-02', 'C-03', 'C-04', 'C-20', 'C-21', 'C-17', 'C-B']); // 開始仕訳・洗替は src（元の内容）で判定
 const TAX_TPLS = new Set(['C-01T', 'C-13', 'C-BT']);
 const NCI_TPLS = new Set(['C-01N', 'C-14', 'C-BN']);
 
@@ -87,6 +87,41 @@ function paymentsFromTerms(c, ignoreTermination = false) {
     if (amt) out.set(m, amt);
   }
   return out;
+}
+
+/**
+ * 貸手の所有権移転外ファイナンス・リースの利息相当額を契約条件から別実装で計算（スケジュールとは別に、計算利子率をニュートン法で求める）。
+ * 当初額＝リース開始時の物件の帳簿価額、見積残存価額＝リース期間終了時の帳簿価額（定額法）。月→当月の利息相当額
+ */
+function financeIncomeFromTerms(c, R) {
+  const r = c.lessor || {};
+  const s = ymToIndex(c.commencement);
+  const last = s + c.termMonths - 1;
+  const aS = ymToIndex(r.assetStart);
+  const accAt = (m) => R((r.assetCost * Math.min(Math.max(m - aS + 1, 0), r.assetLifeMonths)) / r.assetLifeMonths);
+  const NI0 = r.assetCost - accAt(s - 1), res = r.assetCost - accAt(last);
+  const pays = [...paymentsFromTerms(c)].filter(([m]) => m >= s && m <= last);
+  const tOf = (m) => (c.timing === 'advance' ? m - s : m - s + 1);
+  const f = (j) => pays.reduce((a, [m, v]) => a + v * Math.pow(1 + j, -tOf(m)), 0) + res * Math.pow(1 + j, -(last - s + 1)) - NI0;
+  const df = (j) => pays.reduce((a, [m, v]) => a - tOf(m) * v * Math.pow(1 + j, -tOf(m) - 1), 0) - (last - s + 1) * res * Math.pow(1 + j, -(last - s + 2));
+  let j = 0.005;
+  for (let it = 0; it < 100; it++) { const step = f(j) / df(j); j -= step; if (Math.abs(step) < 1e-15) break; }
+  const inc = new Map();
+  let B = NI0, cum = 0, cumR = 0, bal = NI0;
+  for (let m = s; m <= last; m++) {
+    const a = pays.find(([mm]) => mm === m)?.[1] || 0;
+    if (c.timing === 'advance') B -= a;
+    const ix = B * j;
+    B += ix;
+    if (c.timing !== 'advance') B -= a;
+    cum += ix;
+    let v = R(cum) - cumR;
+    if (m === last) v += res - (bal + v - a); // 返還前の残高を見積残存価額に一致させる
+    cumR += v;
+    bal = bal + v - a;
+    inc.set(m, v);
+  }
+  return { inc, rate: Math.pow(1 + j, 12) - 1 };
 }
 
 /** 貸手の受取リース料（定額法）を契約条件から別実装で計算：月→当月の収益 */
@@ -171,7 +206,14 @@ function expectedFlowNet(r, pol, period) {
     add('ROU_COST', L, -(le.cost_end || 0));
     add('ROU_ACC', L, le.acc_end || 0);
     add('LEASE_ACCRUED', L, le.X_end || 0);
-    add('ACCR_INC', Rc, -(endRec.lessor.R_end || 0));
+    if (m.lessorModel === 'finance') {
+      // 貸手のファイナンス・リース：リース投資資産を消去し、物件を連結上の自己所有資産（取得原価・償却累計額）に戻す
+      if (period.end >= ymToIndex(c.commencement)) {
+        add('LEASE_INV', Rc, -(endRec.lessor.NI_end || 0));
+        add('RENTAL_ASSET', Rc, c.lessor.assetCost);
+        add('RENTAL_ACC', Rc, -(endRec.lessor.assetAcc_end || 0));
+      }
+    } else add('ACCR_INC', Rc, -(endRec.lessor.R_end || 0));
     if (pol['POL-07'] === 'capitalize' && m.idc && le.active) { add('OTHER_ASSET', L, m.idc); add('OTHER_ACC', L, -(le.idcAcc_end || 0)); }
   }
   for (const x of sched.months) {
@@ -182,7 +224,10 @@ function expectedFlowNet(r, pol, period) {
     if (m.model === 'asc842ol') add('ASC_COST', L, -(le.cost || 0));
     if (m.model === 'offbalance') add('SHORT_COST', L, -(le.cost || 0));
     if (!le.active) add('PRE_RENT', L, -(lo.cash || 0));
-    add('LEASE_INC', Rc, lo.inc || 0);
+    if (lo.fl) {
+      add('LEASE_INT_INC', Rc, lo.inc || 0);
+      if (x.m >= ymToIndex(c.commencement) && lo.assetDep) add(pol['POL-05'] === 'by_lessee_dept' ? 'DEP_RECLASS' : 'RENTAL_DEP', pol['POL-05'] === 'by_lessee_dept' ? 'CONSOL' : Rc, lo.assetDep);
+    } else add('LEASE_INC', Rc, lo.inc || 0);
     if (le.commence && le.commence.idc && pol['POL-07'] !== 'capitalize') add('IDC_EXP', L, le.commence.idc);
     if (le.commence && le.commence.retroAcc) add('RE_OPEN', L, le.commence.C0 - le.commence.retroAcc - le.commence.L0);
     if (pol['POL-07'] === 'capitalize') add('DEP_OTHER', L, le.idcDep || 0);
@@ -270,6 +315,14 @@ export function runChecks(data, period, pol, gen, names = {}, opts = {}) {
       for (const [m, a] of paymentsFromTerms(c)) if (m >= period.start && m <= period.end) expP += a;
       const schedP = r.sched.months.filter((x) => x.m >= period.start && x.m <= period.end).reduce((a, x) => a + (x.lessor.cash || 0), 0);
       if (expP !== schedP) pay.push({ contract: c.id, message: `契約条件から求めた当期の支払 ${fmt(expP)} ≠ スケジュールの支払 ${fmt(schedP)}` });
+      if (r.sched.meta.lessorModel === 'finance') {
+        // 貸手のファイナンス・リース：契約条件と物件の取得原価・耐用年数から、計算利子率をニュートン法で別に求めて利息相当額を再計算
+        const fl = financeIncomeFromTerms(c, R);
+        let expF = 0;
+        for (const [m, v] of fl.inc) if (m >= period.start && m <= period.end) expF += v;
+        if (expF !== r.ps.inc) pay.push({ contract: c.id, message: `契約条件から求めた当期の利息相当額（ファイナンス・リース、計算利子率 年 ${(fl.rate * 100).toFixed(4)}%）${fmt(expF)} ≠ スケジュール ${fmt(r.ps.inc)}` });
+        continue;
+      }
       let expI = 0;
       for (const [m, v] of lessorIncomeFromTerms(c, R)) if (m >= period.start && m <= period.end) expI += v;
       if (expI !== r.ps.inc) pay.push({ contract: c.id, message: `契約条件から求めた当期の受取リース料（定額法・貸手のリース期間・条件変更を反映）${fmt(expI)} ≠ スケジュール ${fmt(r.ps.inc)}` });
@@ -287,10 +340,12 @@ export function runChecks(data, period, pol, gen, names = {}, opts = {}) {
         const Lcalc = ps.open.L + newL + ps.remeasureL + ps.int + ps.accr - ps.pay - tL;
         if (Lcalc !== ps.close.L) idt.push({ contract: c.id, message: `リース負債：期首 ${fmt(ps.open.L)} ＋新規 ${fmt(newL)} ＋再測定 ${fmt(ps.remeasureL)} ＋利息 ${fmt(ps.int + ps.accr)} −支払 ${fmt(ps.pay)} −取崩 ${fmt(tL)} ＝ ${fmt(Lcalc)} ≠ 期末 ${fmt(ps.close.L)}` });
       }
-      let expL = 0, inc = 0, gain = 0, idcExp = 0, idcKeep = 0, transRE = 0;
+      let expL = 0, inc = 0, gain = 0, idcExp = 0, idcKeep = 0, transRE = 0, flDep = 0;
+      const isFL = sched.meta.lessorModel === 'finance';
       for (const x of sched.months) {
         if (x.m > period.end) break;
         const le = x.lessee;
+        if (isFL && x.lessor.fl && x.m >= ymToIndex(c.commencement)) flDep += x.lessor.assetDep || 0;
         expL += (le.dep || 0) + (le.int || 0) + (le.cost || 0) + (!le.active ? x.lessor.cash : 0);
         inc += x.lessor.inc || 0;
         if (le.term) gain += le.term.gain || 0;
@@ -302,12 +357,12 @@ export function runChecks(data, period, pol, gen, names = {}, opts = {}) {
           if (le.term && sched.meta.idc) idcKeep += sched.meta.idc - le.term.idcAcc;
         }
       }
-      const plEffect = expL - inc - gain - (pol['POL-07'] === 'capitalize' ? idcKeep : idcExp) + transRE;
+      const plEffect = expL - inc - gain - (pol['POL-07'] === 'capitalize' ? idcKeep : idcExp) + transRE - flDep;
       const es = eFromSchedule(sched, period.end, pol);
       const bs = (es[c.lesseeCo] || 0) + (es[c.lessorCo] || 0);
       const E = (r.E.close[c.lesseeCo] || 0) + (r.E.close[c.lessorCo] || 0);
       if (plEffect !== E || bs !== E) idt.push({ contract: c.id, message: `損益の累計 ${fmt(plEffect)}、残高の差 ${fmt(bs)}、仕訳の純資産修正額 ${fmt(E)} が一致しません` });
-      else idt.push({ contract: c.id, message: `一致：Σ借手費用 ${fmt(expL)} − Σ貸手収益 ${fmt(inc)} − 解約・条件変更損益 ${fmt(gain)}${pol['POL-07'] !== 'capitalize' && idcExp ? ` − 初期直接費用 ${fmt(idcExp)}` : ''}${transRE ? ` ＋ 適用時の累積的影響額 ${fmt(transRE)}` : ''} ＝ 残高の差 ＝ ${fmt(E)}`, ok: true });
+      else idt.push({ contract: c.id, message: `一致：Σ借手費用 ${fmt(expL)} − Σ貸手収益 ${fmt(inc)}${flDep ? ` − 連結上の自己所有資産の減価償却費 ${fmt(flDep)}（貸手のファイナンス・リース）` : ''} − 解約・条件変更損益 ${fmt(gain)}${pol['POL-07'] !== 'capitalize' && idcExp ? ` − 初期直接費用 ${fmt(idcExp)}` : ''}${transRE ? ` ＋ 適用時の累積的影響額 ${fmt(transRE)}` : ''} ＝ 残高の差 ＝ ${fmt(E)}`, ok: true });
     }
     const ng = idt.filter((x) => !x.ok);
     return item('CHK-03', '消去差額の恒等式（損益の累計＝残高の差＝仕訳の純資産修正額）とロールフォワード', ng.length ? NG : OK, ng.length ? `${ng.length}件の不一致` : '全契約で3つの計算経路が一致', idt, 'スケジュールの損益・残高と仕訳の比較');

@@ -108,6 +108,19 @@ export function validateContract(c, companies = []) {
     req(Number.isInteger(r.assetLifeMonths) && r.assetLifeMonths > 0, '貸手資産の耐用年数（月数）を入力してください（土地は不要）');
     req(idxOr(r.assetStart) !== null, '貸手資産の取得年月が不正です');
   }
+  if (r.model === 'finance') {
+    // 貸手の所有権移転外ファイナンス・リース（第2法）：対応する範囲を限定する
+    req((c.lessee?.model || 'jgaap') === 'jgaap', '貸手がファイナンス・リースの場合、借手の会計モデルは「日本基準（IFRS第16号も同じ）」にしてください');
+    req(!(c.modifications || []).length, '貸手がファイナンス・リースの契約の条件変更は未対応です（条件変更前後で別の契約として登録してください）');
+    req(!c.terminationYm, '貸手がファイナンス・リースの契約の中途解約は未対応です');
+    req((r.ratio ?? 1) === 1, '貸手がファイナンス・リースの場合、按分比率は100％にしてください（資産全体をリースする前提）');
+    req(r.termMonths === null || r.termMonths === undefined, '貸手がファイナンス・リースの場合、貸手のリース期間は空欄にしてください');
+    req((r.assetCost ?? 0) > 0 && c.assetClass !== 'land', '貸手がファイナンス・リースの場合、償却資産（土地以外）の取得原価・耐用年数・取得年月を入力してください');
+    const as = idxOr(r.assetStart);
+    if (as !== null && s !== null) req(as <= s, '貸手資産の取得年月はリース開始年月以前にしてください');
+    const lc = companies.find((x) => x.code === c.lesseeCo);
+    if (s !== null && lc) { try { req(measurementStart(c, lc).start === s, '貸手がファイナンス・リースの場合、借手の新基準の適用開始後に開始する契約にしてください'); } catch { /* 他の検証で表示 */ } }
+  }
   if (r.termMonths !== null && r.termMonths !== undefined) {
     req(Number.isInteger(r.termMonths) && r.termMonths > 0, '貸手のリース期間（月数）は正の整数です');
     if (Number.isInteger(c.termMonths)) req(r.termMonths <= c.termMonths, '貸手のリース期間は借手のリース期間以下にしてください');
@@ -275,6 +288,21 @@ export function buildSchedule(c, pol = {}, opts = {}) {
     return R((r.assetCost * k) / r.assetLifeMonths);
   };
 
+  // ── 貸手の所有権移転外ファイナンス・リース（第2法：売上高を計上せずに利息相当額を各期へ配分）──
+  // リース投資資産の当初額＝貸手の購入価額等（自己所有資産は帳簿価額）。見積残存価額＝リース期間終了時の帳簿価額（当初の償却計画による）。
+  // 計算利子率（月）＝リース料と見積残存価額の現在価値の合計が当初額と等しくなる率。返還された物件は見積残存価額で計上する。
+  const fl = r.model === 'finance' ? (() => {
+    const NI0 = (r.assetCost || 0) - lessorAccAt(s - 1);
+    const residual = (r.assetCost || 0) - lessorAccAt(lastIdx);
+    const pays = [];
+    for (let m = s; m <= lastIdx; m++) { const a = payInMonth(m); if (a) pays.push({ m, a, t: c.timing === 'advance' ? m - s : m - s + 1 }); }
+    const pv = (j) => pays.reduce((x, p) => x + p.a / Math.pow(1 + j, p.t), 0) + residual / Math.pow(1 + j, lastIdx - s + 1);
+    if (!(pv(0) > NI0)) throw new Error(`貸手のファイナンス・リース：リース料総額＋見積残存価額（${pv(0)}）が物件の帳簿価額（${NI0}）以下のため、計算利子率が求められません`);
+    let lo = 0, hi = 1;
+    for (let it = 0; it < 200; it++) { const mid = (lo + hi) / 2; if (pv(mid) > NI0) lo = mid; else hi = mid; }
+    return { NI0, residual, j: (lo + hi) / 2, Bx: NI0, cumX: 0, cumR: 0 };
+  })() : null;
+
   const firstIdx = Math.min(s, measStart);
   const months = [];
   let prevL = 0, prevCost = 0, prevAcc = 0, prevIdcAcc = 0, prevX = 0, prevR = 0;
@@ -371,13 +399,33 @@ export function buildSchedule(c, pol = {}, opts = {}) {
       Object.assign(le, { L_end: 0, L_open: 0, int: 0, accr: 0, dep: 0, cost_end: 0, acc_end: 0, X_end: 0, cost: 0 });
     }
 
-    // 貸手：受取リース料（区間内は定額法）
-    if (m >= s) {
+    // 貸手：ファイナンス・リースは利息相当額（実効利率で各月に配分、累計で端数処理）、オペレーティング・リースは受取リース料（区間内は定額法）
+    if (fl) {
+      lo.fl = true;
+      if (m === s) lo.flStart = { cost: r.assetCost, acc: lessorAccAt(s - 1), NI0: fl.NI0, rate: Math.pow(1 + fl.j, 12) - 1 };
+      if (m >= s) {
+        const a = payInMonth(m);
+        if (c.timing === 'advance') fl.Bx -= a;
+        const ix = fl.Bx * fl.j;
+        fl.Bx += ix;
+        if (c.timing !== 'advance') fl.Bx -= a;
+        fl.cumX += ix;
+        let inc = R(fl.cumX) - fl.cumR;
+        const prevNI = m === s ? fl.NI0 : prevR || 0; // リース開始月の期首はリース投資資産の当初額
+        const before = prevNI + inc - lo.cash; // 返還前のリース投資資産
+        if (m === lastIdx) inc += fl.residual - before; // 最終月：返還前の残高を見積残存価額に一致させる（端数調整）
+        fl.cumR += inc;
+        lo.inc = inc;
+        lo.NI_end = m === lastIdx ? 0 : prevNI + inc - lo.cash;
+        if (m === lastIdx) lo.flEnd = { residual: fl.residual };
+      } else { lo.inc = 0; lo.NI_end = 0; }
+      lo.R_end = 0;
+    } else if (m >= s) {
       const cum = R((incSeg.total * (m - incSeg.start + 1)) / (incSeg.end - incSeg.start + 1));
       lo.inc = cum - incSeg.prevCum;
       incSeg.prevCum = cum;
     } else lo.inc = 0;
-    lo.R_end = prevR + lo.inc - lo.cash;
+    if (!fl) lo.R_end = prevR + lo.inc - lo.cash;
 
     // 貸手資産の減価償却（按分比率適用前の全体額。土地は非償却）
     const accL = lessorAccAt(m);
@@ -410,10 +458,10 @@ export function buildSchedule(c, pol = {}, opts = {}) {
     prevCost = le.cost_end || 0;
     prevAcc = le.acc_end || 0;
     prevX = le.X_end || 0;
-    prevR = lo.R_end || 0;
+    prevR = fl ? lo.NI_end || 0 : lo.R_end || 0;
     months.push(rec);
   }
-  Object.assign(meta, { terminated, firstIdx, lastIdx, finalEnd });
+  Object.assign(meta, { terminated, firstIdx, lastIdx, finalEnd, lessorModel: fl ? 'finance' : 'operating', ...(fl ? { flNI0: fl.NI0, flResidual: fl.residual, flRate: Math.pow(1 + fl.j, 12) - 1 } : {}) });
   return { contract: c, meta, months, byIndex: (i) => (i >= firstIdx && i <= lastIdx ? months[i - firstIdx] : null) };
 }
 

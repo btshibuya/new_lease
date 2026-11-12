@@ -94,7 +94,7 @@ test('注記：キャッシュ・アウトフロー＝連結CFの消去額、使
       assert.deepEqual(BUCKETS.map((b) => g.get(`X-LLP.${b.key}`).amount), m.map((x) => x.principal));
       let fut = 0;
       for (const r of gen.results) { const e = r.sched.byIndex(p.end); if (e && !e.lessee.term) fut += r.sched.months.filter((x) => x.m > p.end).reduce((a, x) => a + (x.lessor.cash || 0), 0); }
-      assert.equal(sum('R-MAT'), fut, `${p.label} 将来の受取リース料`);
+      assert.equal(sum('R-MAT') + sum('R-FMAT'), fut, `${p.label} 将来の受取リース料（オペレーティング＋ファイナンス）`);
       for (const [k, v] of g) assert.equal(v.rows.reduce((a, x) => a + x.amt, 0), v.amount, k);
     }
   }

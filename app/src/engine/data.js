@@ -147,6 +147,7 @@ export function sanitizeContract(c) {
       taxLease: bool(l.taxLease),
     },
     lessor: {
+      model: oneOf(r.model, ['operating', 'finance'], 'operating'), // 貸手の会計処理：オペレーティング・リース／所有権移転外ファイナンス・リース
       assetId: str(r.assetId, 30),
       assetCost: num(r.assetCost, 0, { min: 0 }),
       assetLifeMonths: int(r.assetLifeMonths, 0, { min: 0, max: 1200 }),
@@ -169,7 +170,7 @@ export function sanitizeContract(c) {
 export function sanitizeCarry(raw) {
   const out = {};
   if (!raw || typeof raw !== 'object') return out;
-  for (const k of ['C-02', 'C-03', 'C-04', 'C-20', 'C-17', 'C-13', 'C-14', 'C-10', 'C-11']) if (['carry_reverse', 'carry', 'none'].includes(raw[k])) out[k] = raw[k];
+  for (const k of ['C-02', 'C-03', 'C-04', 'C-20', 'C-21', 'C-17', 'C-13', 'C-14', 'C-10', 'C-11']) if (['carry_reverse', 'carry', 'none'].includes(raw[k])) out[k] = raw[k];
   return out;
 }
 

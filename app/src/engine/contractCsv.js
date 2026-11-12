@@ -65,6 +65,7 @@ const ASSET = Object.fromEntries(Object.entries(ASSET_CLASSES).map(([k, v]) => [
 const ROU_TR = { eq_liability: ['リース負債と同額'], retrospective: ['遡及', 'リース開始時から'] };
 const INC = { sales: ['売上高'], nonop: ['営業外収益'] };
 const DEPC = { cogs: ['売上原価'], nonop: ['営業外費用'] };
+const LMODEL = { operating: ['オペレーティング', 'オペレーティング・リース'], finance: ['ファイナンス（所有権移転外）', 'ファイナンス', '所有権移転外ファイナンス・リース'] };
 const first = (map, k) => map[k]?.[0] ?? '';
 
 /**
@@ -104,6 +105,7 @@ export const CONTRACT_COLUMNS = [
   { label: '借手：適用開始前の契約の使用権資産', help: 'リース負債と同額／遡及', get: (c) => first(ROU_TR, c.lessee.rouTransition), set: (o, v, e, l) => { o.lessee.rouTransition = toChoice(v, ROU_TR, e, l) ?? 'eq_liability'; } },
   { label: '借手：適用開始時の割引率（年％）', help: '任意。空欄＝上の割引率', get: (c) => (c.lessee.transitionRate === null || c.lessee.transitionRate === undefined ? '' : +(c.lessee.transitionRate * 100).toFixed(6)), set: (o, v, e, l) => { o.lessee.transitionRate = toPct(v, e, l); } },
   { label: '借手：法人税法上のリース取引', help: 'はい／いいえ', get: (c) => (c.lessee.taxLease ? 'はい' : 'いいえ'), set: (o, v, e, l) => { o.lessee.taxLease = toBool(v, e, l) ?? false; } },
+  { label: '貸手：会計処理', help: 'オペレーティング／ファイナンス（所有権移転外）。空欄＝オペレーティング', get: (c) => first(LMODEL, c.lessor.model || 'operating'), set: (o, v, e, l) => { o.lessor.model = toChoice(v, LMODEL, e, l) ?? 'operating'; } },
   { label: '貸手：資産ID', help: '同じ資産を複数契約で使う場合は同じID', get: (c) => c.lessor.assetId, set: (o, v) => { o.lessor.assetId = norm(v); } },
   { label: '貸手：対象資産の取得原価', help: '', get: (c) => c.lessor.assetCost || '', set: (o, v, e, l) => { o.lessor.assetCost = toNum(v, e, l) ?? 0; } },
   { label: '貸手：耐用年数（月数）', help: '', get: (c) => c.lessor.assetLifeMonths || '', set: (o, v, e, l) => { o.lessor.assetLifeMonths = toNum(v, e, l) ?? 0; } },

@@ -1,8 +1,8 @@
 // サンプルデータ（金額単位：千円）。K-001 は要件定義書 第10章の設例と同一条件。
 // K-008〜K-027 と子会社 S4（持分比率が期中に変動）はテスト用の追加物件（sampleExtra.js）、
-// K-028〜K-051 と子会社 S5・S6 は第2弾の追加物件（sampleMore.js）。
+// K-028〜K-051 と子会社 S5・S6 は第2弾の追加物件、K-052 は貸手が所有権移転外ファイナンス・リースとする契約（sampleMore.js）。
 import { extraContracts, extraCompany } from './sampleExtra.js';
-import { moreContracts, moreCompanies } from './sampleMore.js';
+import { moreContracts, moreCompanies, financeLeaseContracts } from './sampleMore.js';
 
 export function sampleData() {
   return {
@@ -76,6 +76,7 @@ export function sampleData() {
       },
       ...extraContracts(),
       ...moreContracts(),
+      ...financeLeaseContracts(),
     ],
     notes: {},
     manualJournals: [],

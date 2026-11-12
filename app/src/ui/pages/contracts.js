@@ -288,13 +288,14 @@ function editor(c, data) {
       c.lessee.transition?.method === 'cumulative' ? fL('（旧形式）契約単位の適用開始年月', month(f.lessee.transition, 'ym')) : null,
       fL('法人税法上のリース取引（売買扱い）', h('input', { type: 'checkbox', checked: !!f.lessee.taxLease, on: { change: (e) => { f.lessee.taxLease = e.target.checked; } } }), '該当する場合、税効果は個別検討（検算で注意喚起）'))),
     modsFieldset(f),
-    h('fieldset', null, h('legend', null, '貸手の情報（オペレーティング・リース）'), grid(
+    h('fieldset', null, h('legend', null, '貸手の情報'), grid(
+      fR('貸手の会計処理', sel(f.lessor, 'model', [['operating', 'オペレーティング・リース（賃貸資産を保有・受取リース料を定額で計上）'], ['finance', '所有権移転外ファイナンス・リース（物件を除却しリース投資資産を計上・利息相当額を各期に配分）']]), 'ファイナンス・リースは第2法（売上高を計上せずに利息相当額を各期へ配分）。リース投資資産の当初額＝リース開始時の物件の帳簿価額、見積残存価額＝リース期間終了時の帳簿価額。連結では物件を自己所有資産に戻して償却を続けます。条件変更・中途解約・按分比率100％未満は未対応'),
       fR('資産ID', txt(f.lessor, 'assetId', 30), '同じ資産を複数契約で使う場合は同じIDにし、按分比率を設定'),
       fR('対象資産の取得原価', num(f.lessor, 'assetCost', { min: 0 })),
       fR('耐用年数（月数）', num(f.lessor, 'assetLifeMonths', { step: 1, min: 0 })),
       fR('取得年月', month(f.lessor, 'assetStart')),
       fR('按分比率（％）', pct(f.lessor, 'ratio')),
-      fR('受取リース料の計上区分', sel(f.lessor, 'incClass', [['sales', '売上高'], ['nonop', '営業外収益']])),
+      fR('受取リース料・受取利息の計上区分', sel(f.lessor, 'incClass', [['sales', '売上高'], ['nonop', '営業外収益']])),
       fR('減価償却費の計上区分', sel(f.lessor, 'depClass', [['cogs', '売上原価（賃貸原価）'], ['nonop', '営業外費用']])),
       fR('貸手のリース期間（月数、空欄＝借手と同じ）', num(f.lessor, 'termMonths', { step: 1, nullable: true }), '貸手が延長オプションを考慮しない場合など。期間後は残りのリース料を残存期間で定額認識'))),
     h('div', { class: 'row' },
@@ -380,10 +381,12 @@ function reportCard(c, sc, ctx) {
     equity: (r) => [[F('資産合計', r.assets), '−', F('負債合計', r.liabs)], '借手の純資産への影響＝資産合計（使用権資産簿価）−負債合計（リース負債＋未払）'],
     assets: (r) => [[F('取得原価', r.cost), '−', F('減価償却累計額', r.acc)], '使用権資産の簿価'],
     liabs: (r) => [[F('リース負債', r.L), '＋', F('未払', r.X)], '負債合計'],
-    cumE: (r) => [[F('リース負債', r.L), '＋', F('未払', r.X), '−', F('使用権資産簿価', r.rou), '−', F('貸手の未収', r.R)], '消去差額（純資産修正額）。初期直接費用を資産計上する方針では、その未償却残高を調整'],
+    cumE: (r) => (sc.meta.lessorModel === 'finance'
+      ? [[F('リース負債', r.L), '＋', F('未払', r.X), '−', F('使用権資産簿価', r.rou), '−', F('リース投資資産', r.NI), '＋', F('連結上の自己所有資産の簿価', r.BV)], '消去差額（純資産修正額）。貸手のファイナンス・リースは、リース投資資産を消去し、物件を連結上の自己所有資産に戻す']
+      : [[F('リース負債', r.L), '＋', F('未払', r.X), '−', F('使用権資産簿価', r.rou), '−', F('貸手の未収', r.R)], '消去差額（純資産修正額）。初期直接費用を資産計上する方針では、その未償却残高を調整']),
     plEffect: (r) => [[F('期末の消去差額', r.cumE), '−', F('期首の消去差額', r.cumE - r.plEffect)], '連結損益への影響（税引前）＝消去差額の当期の増減'],
   };
-  const NAMES = { pay: '支払', principal: '元本', int: '利息', L: '期末リース負債', X: '未払', cost: '使用権資産（取得原価）', dep: '減価償却費', acc: '減価償却累計額', assets: '資産合計', liabs: '負債合計', equity: '純資産への影響（借手）', other: 'その他の費用', lesseeExp: '借手の費用', inc: '貸手の収益', R: '貸手の未収', plEffect: '連結損益への影響', cumE: '消去差額の累計' };
+  const NAMES = { pay: '支払', principal: '元本', int: '利息', L: '期末リース負債', X: '未払', cost: '使用権資産（取得原価）', dep: '減価償却費', acc: '減価償却累計額', assets: '資産合計', liabs: '負債合計', equity: '純資産への影響（借手）', other: 'その他の費用', lesseeExp: '借手の費用', inc: sc.meta.lessorModel === 'finance' ? '貸手の受取利息（利息相当額）' : '貸手の収益', R: '貸手の未収', NI: 'リース投資資産', BV: '連結上の自己所有資産の簿価', plEffect: '連結損益への影響', cumE: '消去差額の累計' };
   const FLOW = new Set(['pay', 'principal', 'int', 'dep', 'other', 'lesseeExp', 'inc', 'plEffect']);
   const calc = (key) => (r) => {
     const fm = FORM[key] ? FORM[key](r) : null;
@@ -404,10 +407,10 @@ function reportCard(c, sc, ctx) {
     num('支払', 'pay'), num('元本', 'principal'), num('利息', 'int'), num('期末リース負債', 'L'), num('未払', 'X'),
     num('使用権資産（取得原価）', 'cost'), num('減価償却費', 'dep'), num('減価償却累計額', 'acc'),
     num('資産合計（使用権資産簿価）', 'assets'), num('負債合計（リース負債＋未払）', 'liabs'), num('純資産への影響（借手）', 'equity'),
-    ...(hasOther ? [num('その他の費用', 'other')] : []), num('借手の費用', 'lesseeExp'), num('貸手の収益', 'inc'), num('貸手の未収', 'R'),
+    ...(hasOther ? [num('その他の費用', 'other')] : []), num('借手の費用', 'lesseeExp'), ...(sc.meta.lessorModel === 'finance' ? [num('貸手の受取利息（利息相当額）', 'inc'), num('リース投資資産', 'NI'), num('連結上の自己所有資産の簿価', 'BV')] : [num('貸手の収益', 'inc'), num('貸手の未収', 'R')]),
     num('連結損益への影響', 'plEffect'), num('消去差額の累計', 'cumE'),
   ];
-  const totalRow = { label: '合計', event: '', pay: tot('pay'), principal: tot('principal'), int: tot('int'), L: null, X: null, cost: null, dep: tot('dep'), acc: null, assets: null, liabs: null, equity: null, other: tot('other'), lesseeExp: tot('lesseeExp'), inc: tot('inc'), R: null, plEffect: tot('plEffect'), cumE: null, total: true, months: mo };
+  const totalRow = { label: '合計', event: '', pay: tot('pay'), principal: tot('principal'), int: tot('int'), L: null, X: null, cost: null, dep: tot('dep'), acc: null, assets: null, liabs: null, equity: null, other: tot('other'), lesseeExp: tot('lesseeExp'), inc: tot('inc'), R: null, NI: null, BV: null, plEffect: tot('plEffect'), cumE: null, total: true, months: mo };
   const exportCsv = () => download(`返済・償却スケジュール_${c.id}_${rep.unit === 'month' ? '月次' : '年度'}.csv`, toCsv([cols.map((x) => x.label), ...[...rows, totalRow].map((r) => cols.map((x) => (x.key ? r[x.key] ?? '' : r.event || '')))]), 'text/csv;charset=utf-8');
   const pre = tot('prePay');
   return h('section', { class: 'card', id: 'contract-monthly' },

@@ -10,6 +10,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'app', 'src', 'engine');
 
 const MUTATIONS = [
+  ['リース投資資産の当初額に償却累計額を反映しない（ファイナンス・リース）', 'schedule.js', 'const NI0 = (r.assetCost || 0) - lessorAccAt(s - 1);', 'const NI0 = (r.assetCost || 0) - lessorAccAt(s - 13);'],
+  ['連結上の自己所有資産の減価償却を計上しない（ファイナンス・リース）', 'elimination.js', '    if (lo.assetDep) {\n      const byDept', '    if (false) {\n      const byDept'],
   ['新しい持分比率をみなし日の翌月でなく当月から使う', 'accounts.js', 'return { rec: r, deemedIdx: dm, fromIdx: dm + 1,', 'return { rec: r, deemedIdx: dm, fromIdx: dm,'],
   ['みなし日が等距離のとき後の日にする', 'accounts.js', 'return day - monthEndDay(prev) <= monthEndDay(next) - day ? prev : next;', 'return day - monthEndDay(prev) < monthEndDay(next) - day ? prev : next;'],
   ['持分比率の推移を無視して基準の比率を使う', 'accounts.js', "if (key === 'nciRatio' && co.ownership && co.ownership.length) {", "if (false) {"],

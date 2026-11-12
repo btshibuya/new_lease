@@ -44,6 +44,7 @@ test('サンプルの物件が入力パターンを網羅している', () => {
   has('営業外の収益・費用', (c) => c.lessor.incClass === 'nonop' && c.lessor.depClass === 'nonop');
   has('実績との突合（年度末・四半期末）', (c) => Object.keys(c.actuals).length >= 2);
   has('支払額の手修正', (c) => c.paymentOverrides.length > 0);
+  has('貸手：所有権移転外ファイナンス・リース（リース投資資産）', (c) => c.lessor.model === 'finance');
   has('子会社→親会社', (c) => CO.find((x) => x.code === c.lesseeCo)?.isParent);
   has('子会社どうし', (c) => !CO.find((x) => x.code === c.lesseeCo)?.isParent && !CO.find((x) => x.code === c.lessorCo)?.isParent);
   hasCo('旧科目名', (x) => x.legacyAccounts);
@@ -69,4 +70,48 @@ test('利息は累計で端数処理する：少額の契約でもリース負�
   // 月5千円・年2％の駐車場（K-042）：最終月の利息は通常の月と同程度（変更前は15を最終月に計上していた）
   const k42 = buildSchedule(d.contracts.find((c) => c.id === 'K-042'), defaultPolicies(), { lesseeCompany: d.companies.find((x) => x.code === 'S6') });
   assert.ok(Math.abs(k42.months[k42.months.length - 1].lessee.int) <= 1);
+});
+
+import { generateAll } from '../app/src/engine/elimination.js';
+import { worksheet, eFromSchedule } from '../app/src/engine/reports.js';
+import { groupNoteAmounts } from '../app/src/engine/notes.js';
+import { buildPeriods, ymToIndex } from '../app/src/engine/util.js';
+
+test('貸手の所有権移転外ファイナンス・リース（K-052）：リース投資資産と受取利息は連結後0、物件は連結上の自己所有資産として償却を続け、リース期間の終了で消去差額は0', () => {
+  for (const p5 of ['by_lessee_dept', 'as_is']) for (const p4 of ['reclass', 'none']) {
+    const pol = { ...defaultPolicies(), 'POL-05': p5, 'POL-04': p4 };
+    const c = d.contracts.find((x) => x.id === 'K-052');
+    const s = buildSchedule(c, pol, { lesseeCompany: d.companies.find((x) => x.code === c.lesseeCo) });
+    // 当初額＝リース開始時の帳簿価額、利息の合計＝リース料総額＋見積残存価額−当初額
+    assert.equal(s.meta.flNI0, 12000 - Math.round((12000 * (ymToIndex('2027-09') - ymToIndex('2005-04') + 1)) / 480));
+    const sumInc = s.months.reduce((a, x) => a + x.lessor.inc, 0), sumCash = s.months.reduce((a, x) => a + x.lessor.cash, 0);
+    assert.equal(sumInc, sumCash + s.meta.flResidual - s.meta.flNI0);
+    assert.ok(s.months.every((x) => (x.lessor.NI_end || 0) >= 0));
+    assert.deepEqual(eFromSchedule(s, s.meta.lastIdx, pol), { S1: 0, P: 0 });
+    for (const p of buildPeriods(ymToIndex('2027-04'), ymToIndex('2038-03'), 3, 'year')) {
+      const g = generateAll(d, p, pol);
+      const ws = worksheet(g, d.companies, pol, {}, p);
+      for (const acc of ['LEASE_INV', 'LEASE_INT_INC']) assert.equal(ws.filter((r) => r.acc === acc).reduce((a, r) => a + r.consol, 0), 0, `${p5} ${p4} ${p.label} ${acc}`);
+      // 連結上の減価償却費（C-21）＝当期の物件の償却額（リース期間中）
+      const dep = g.journals.filter((j) => j.contractId === 'K-052' && j.tpl === 'C-21').flatMap((j) => j.lines).filter((l) => ['DEP_RECLASS', 'RENTAL_DEP'].includes(l.acc)).reduce((a, l) => a + l.amt, 0);
+      const expDep = s.months.filter((x) => x.m >= p.start && x.m <= p.end && x.m >= ymToIndex(c.commencement)).reduce((a, x) => a + x.lessor.assetDep, 0);
+      assert.equal(dep, expDep, `${p5} ${p4} ${p.label} 連結上の減価償却費`);
+      // 注記：リース投資資産の内訳の合計＝期末のリース投資資産
+      const n = groupNoteAmounts(g, p, pol, d.companies);
+      const inv = ['pay', 'res', 'unearned'].reduce((a, k) => a + n.get(`R-INV.${k}`).rows.filter((x) => x.contract === 'K-052').reduce((b, x) => b + x.amt, 0), 0);
+      const end = s.byIndex(Math.min(p.end, s.meta.lastIdx));
+      assert.equal(inv, p.end >= ymToIndex(c.commencement) && p.end < s.meta.lastIdx ? end.lessor.NI_end : 0, `${p.label} リース投資資産の内訳`);
+    }
+  }
+});
+
+test('貸手のファイナンス・リースの入力制限：条件変更・中途解約・按分比率100％未満・借手がASC842 は入力エラー', async () => {
+  const { validateContract } = await import('../app/src/engine/schedule.js');
+  const base = d.contracts.find((x) => x.id === 'K-052');
+  const errs = (o) => validateContract({ ...structuredClone(base), ...o }, d.companies);
+  assert.deepEqual(errs({}), []);
+  assert.ok(errs({ modifications: [{ ym: '2029-04', payment: 50, termMonths: null, rate: null }] }).some((e) => /条件変更/.test(e)));
+  assert.ok(errs({ terminationYm: '2030-03' }).some((e) => /中途解約/.test(e)));
+  assert.ok(errs({ lessor: { ...base.lessor, ratio: 0.5 } }).some((e) => /按分比率/.test(e)));
+  assert.ok(errs({ lessee: { ...base.lessee, model: 'asc842ol' } }).some((e) => /借手の会計モデル/.test(e)));
 });

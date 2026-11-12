@@ -146,3 +146,14 @@ export function moreContracts() {
     }),
   ];
 }
+
+/** 貸手が所有権移転外ファイナンス・リース（リース投資資産）とする契約（K-052）。借手は新基準で使用権資産・リース負債を計上 */
+export function financeLeaseContracts() {
+  return [
+    k('K-052', '賃貸用倉庫（貸手：所有権移転外ファイナンス・リース・リース投資資産）', 'P', 'S1', 'building', {
+      commencement: '2027-10', termMonths: 120, frequencyMonths: 1, timing: 'arrears', payment: 40,
+      lessee: lessee({ rate: 0.025 }),
+      lessor: lessor('A-52', { model: 'finance', assetCost: 12000, assetLifeMonths: 480, assetStart: '2005-04' }),
+    }),
+  ];
+}

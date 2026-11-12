@@ -1,6 +1,6 @@
 // 連結精算表・連結CF消去データ・満期分析（共通部品）
 import { accountLabel, ACCOUNTS, metaOf } from './accounts.js';
-import { round } from './util.js';
+import { round, ymToIndex } from './util.js';
 import { phaseAtIndex, lessorDepBetween } from './schedule.js';
 import { monthReversals } from './elimination.js';
 
@@ -47,9 +47,16 @@ export function individualLines(result, companies, pol) {
   add('PENALTY_EXP', c.lesseeCo, pen, '借手個別：支払違約金');
   add('PENALTY_INC', c.lessorCo, -pen, '貸手個別：受取違約金');
   // 貸手
+  const r = c.lessor || {};
+  if (sched.meta.lessorModel === 'finance') {
+    // 所有権移転外ファイナンス・リース：物件は個別では除却し、リース投資資産と利息相当額（受取利息）を計上
+    const endRec = sched.byIndex(Math.min(pE, sched.meta.lastIdx));
+    add('LEASE_INT_INC', c.lessorCo, -ps.inc, '貸手個別：リース投資資産に係る受取利息（利息相当額）');
+    if (endRec && pE < sched.meta.lastIdx) add('LEASE_INV', c.lessorCo, endRec.lessor.NI_end || 0, '貸手個別：リース投資資産');
+    return out;
+  }
   add('LEASE_INC', c.lessorCo, -ps.inc, '貸手個別：受取リース料');
   add('ACCR_INC', c.lessorCo, cl.R, '貸手個別：未収リース料（定額法）');
-  const r = c.lessor || {};
   if (r.assetCost > 0) {
     const ratio = r.ratio ?? 1;
     const endRec = sched.byIndex(pE);
@@ -101,7 +108,7 @@ export function worksheet(gen, companies, pol, names, period, opts = {}) {
 }
 
 /** グループ内で消去後に0となるべき科目 */
-export const MUST_BE_ZERO = ['ROU_COST', 'ROU_ACC', 'LL_C', 'LL_NC', 'LEASE_ACCRUED', 'DEP_ROU', 'INT', 'ASC_COST', 'SHORT_COST', 'PRE_RENT', 'LEASE_INC', 'ACCR_INC', 'PENALTY_INC', 'PENALTY_EXP', 'MOD_GAIN', 'LEGACY_ASSET', 'LEGACY_ACC', 'LEGACY_LIAB', 'LEGACY_LIAB_C'];
+export const MUST_BE_ZERO = ['ROU_COST', 'ROU_ACC', 'LL_C', 'LL_NC', 'LEASE_ACCRUED', 'DEP_ROU', 'INT', 'ASC_COST', 'SHORT_COST', 'PRE_RENT', 'LEASE_INC', 'ACCR_INC', 'LEASE_INV', 'LEASE_INT_INC', 'PENALTY_INC', 'PENALTY_EXP', 'MOD_GAIN', 'LEGACY_ASSET', 'LEGACY_ACC', 'LEGACY_LIAB', 'LEGACY_LIAB_C'];
 
 /** 連結CF計算書の消去データ */
 export function cashFlowEliminations(gen, pol, period) {
@@ -181,7 +188,7 @@ export function maturity(gen, period) {
 /**
  * スケジュールから直接求める会社別の純資産修正額（仕訳とは別経路の検証用）
  * 借手：リース負債＋未払リース料−使用権資産簿価（初期直接費用を資産計上する方針では、その未償却残高を除く）
- * 貸手：−未収リース料
+ * 貸手：−未収リース料（ファイナンス・リースは、連結上の自己所有資産の帳簿価額−リース投資資産）
  */
 export function eFromSchedule(sched, idx, pol) {
   const c = sched.contract;
@@ -190,6 +197,11 @@ export function eFromSchedule(sched, idx, pol) {
   const le = rec.lessee;
   let eL = (le.L_end || 0) + (le.X_end || 0) - ((le.cost_end || 0) - (le.acc_end || 0));
   if (pol['POL-07'] === 'capitalize' && le.active && !le.term && sched.meta.idc) eL += sched.meta.idc - (le.idcAcc_end || 0);
+  if (sched.meta.lessorModel === 'finance') {
+    // リース期間終了の月は、返還された物件（見積残存価額＝連結上の帳簿価額）で個別と連結が一致する
+    const eR = idx >= sched.meta.lastIdx || idx < ymToIndex(c.commencement) ? 0 : ((rec.lessor.assetCost || 0) - (rec.lessor.assetAcc_end || 0)) - (rec.lessor.NI_end || 0);
+    return { [c.lesseeCo]: eL, [c.lessorCo]: eR };
+  }
   return { [c.lesseeCo]: eL, [c.lessorCo]: -(rec.lessor.R_end || 0) };
 }
 
@@ -262,6 +274,8 @@ export function contractMonthly(sched, pol) {
       m: x.m, pay, prePay, int, principal: model !== 'offbalance' && le.active ? pay - int : 0, L: le.L_end || 0,
       cost: le.cost_end || 0, dep: le.dep || 0, acc: le.acc_end || 0, rou, X: le.X_end || 0,
       assets: rou, liabs, equity: rou - liabs, other, lesseeExp, inc: lo.inc || 0, R: lo.R_end || 0,
+      // 貸手のファイナンス・リース：リース投資資産と、連結上の自己所有資産の帳簿価額
+      NI: lo.fl ? lo.NI_end || 0 : 0, BV: lo.fl && x.m >= ymToIndex(sched.contract.commencement) && x.m < sched.meta.lastIdx ? (lo.assetCost || 0) - (lo.assetAcc_end || 0) : 0,
       cumE, plEffect: cumE - prevE, event: ev.join('・'),
     });
     prevE = cumE;
@@ -315,7 +329,7 @@ export function companyMonthly(items, code, pol) {
       let pl = 0;
       for (const rv of rec ? monthReversals(rec, sched, pol) : []) for (const l of rv.lines) if (l.co === code && ACCOUNTS[l.acc]?.type === 'PL') pl -= l.amt;
       // 貸手の減価償却費の組替（C-12）：貸手の会社の賃貸原価等を取り消し、連結（会社に属さない）の費用に組み替える
-      if (isR && pol['POL-05'] === 'by_lessee_dept' && (c.lessor?.assetCost || 0) > 0) pl += lessorDepBetween(sched, r.m, r.m, c.lessor.ratio ?? 1, R);
+      if (isR && pol['POL-05'] === 'by_lessee_dept' && (c.lessor?.assetCost || 0) > 0 && sched.meta.lessorModel !== 'finance') pl += lessorDepBetween(sched, r.m, r.m, c.lessor.ratio ?? 1, R);
       pl = pl || 0; // −0 を 0 にそろえる
       row.plImpact += pl; part.plImpact = pl;
       const e = eFromSchedule(sched, r.m, pol)[code] || 0;

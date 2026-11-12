@@ -3,7 +3,7 @@
 //
 // 連結の注記額 ＝ 各社の個別の注記額の合計 − うちグループ内リース分
 // グループ内リース分は、アプリで計算できる項目（calc）は契約から計算し、計算できない項目（input）は各社が収集表に記入する。
-import { round } from './util.js';
+import { round, ymToIndex } from './util.js';
 import { toCsv, validCode } from './data.js';
 import { parseCsv } from './contractCsv.js';
 import { maturity } from './reports.js';
@@ -45,16 +45,18 @@ export const NOTE_ITEMS = [
     desc: '当期に新たに計上した使用権資産の額と、条件変更（リース負債の再測定）による増加額です。適用初年度に経過措置で計上した額は含めていません（扱いは会計監査人と確認してください）。' },
   { id: 'L-DEP', sec: 'L-B', title: '科目ごとの使用権資産の減価償却費', when: '当期', kind: 'calc', byClass: true,
     desc: '当期の使用権資産の減価償却費を、対応する原資産を自ら所有していたと仮定した場合に表示する科目ごとに記載します。' },
-  { id: 'R-INV', sec: 'R-A', title: 'リース債権及びリース投資資産の内訳', when: '期末', kind: 'na',
-    desc: 'ファイナンス・リースの貸手が計上するリース債権・リース投資資産の内訳（将来のリース料、見積残存価額、受取利息相当額など）です。グループ内リースはオペレーティング・リースとして扱うため、グループ内の分はありません。グループ外のファイナンス・リースがある会社だけ記入します。' },
-  { id: 'R-INT', sec: 'R-A', title: '受取利息相当額', when: '当期', kind: 'na',
-    desc: 'ファイナンス・リースの貸手が当期に計上した受取利息相当額です。グループ内の分はありません（オペレーティング・リースのため）。' },
+  { id: 'R-INV', sec: 'R-A', title: 'リース債権及びリース投資資産の内訳', when: '期末', kind: 'calc', byList: [['pay', 'リース料債権部分（将来のリース料）'], ['res', '見積残存価額部分'], ['unearned', '受取利息相当額（控除）']],
+    desc: 'ファイナンス・リースの貸手が計上するリース投資資産（所有権移転外）・リース債権（所有権移転）について、将来のリース料を収受する権利に係る部分、見積残存価額部分、受取利息相当額を記載します（3つの合計＝期末のリース投資資産）。グループ内の分は、貸手が「所有権移転外ファイナンス・リース」とした契約の期末のリース投資資産の内訳です（オペレーティング・リースの契約は対象外）。' },
+  { id: 'R-INT', sec: 'R-A', title: '受取利息相当額', when: '当期', kind: 'calc',
+    desc: 'ファイナンス・リースの貸手が当期に計上した受取利息相当額（リース投資資産に係る受取利息）です。グループ内の分は、貸手が「所有権移転外ファイナンス・リース」とした契約の当期の利息相当額です。' },
   { id: 'R-VAR', sec: 'R-A', title: '変動する使用料に係る収益', when: '当期', kind: 'input',
     desc: '貸手のリース料に含めていない、将来の業績・使用量等により変動する使用料の当期の収益です。アプリは計算しないため、グループ会社とのリースに係る分を収集表の「うちグループ会社とのリース分」に記入します。' },
   { id: 'R-CHG', sec: 'R-B', title: 'リース債権及びリース投資資産の残高の重要な変動', when: '当期', kind: 'text',
     desc: 'リース債権・リース投資資産の残高に重要な変動があった場合に、その内容を文章で記載します。グループ内の分はありません。収集表では「備考」に記入します。' },
+  { id: 'R-FMAT', sec: 'R-B', title: 'リース投資資産に係るリース料債権部分の回収予定額（決算日後5年以内は1年ごと、5年超）', when: '期末', kind: 'calc', byBucket: true,
+    desc: 'ファイナンス・リースの貸手について、リース債権・リース投資資産に係るリース料債権部分（割引前の将来のリース料）を、決算日後5年以内は1年ごと、5年超はまとめて記載します。グループ内の分は、貸手が「所有権移転外ファイナンス・リース」とした契約の将来のリース料です。' },
   { id: 'R-MAT', sec: 'R-B', title: 'リース料の回収予定額（決算日後5年以内は1年ごと、5年超）', when: '期末', kind: 'calc', byBucket: true,
-    desc: '決算日後に回収（受取）する予定のリース料（割引前）を、5年以内は1年ごと、5年超はまとめて記載します。オペレーティング・リースは将来の受取リース料、ファイナンス・リースはリース債権・リース投資資産に係るリース料です。グループ内の分は、オペレーティング・リースの将来の受取リース料です。' },
+    desc: '決算日後に回収（受取）する予定のリース料（割引前）を、5年以内は1年ごと、5年超はまとめて記載します（オペレーティング・リースの将来の受取リース料）。グループ内の分は、貸手がオペレーティング・リースとした契約の将来の受取リース料です。ファイナンス・リースは上の「リース投資資産に係るリース料債権部分の回収予定額」に記載します。' },
   { id: 'O-SLB', sec: 'O', title: 'セール・アンド・リースバック取引', when: '当期', kind: 'input',
     desc: '資産を売却し、同じ資産をリースバックする取引について、取引の内容や売却損益などを注記します（該当する場合）。グループ会社との間で行った取引は連結上消去するため、各社の注記額のうちグループ会社との取引の分を「うちグループ会社とのリース分」に記入します。注記の要否・項番号は基準の原文で確認してください。' },
   { id: 'O-SUB', sec: 'O', title: 'サブリース取引（転リース）', when: '当期', kind: 'input',
@@ -121,16 +123,29 @@ export function groupNoteAmounts(gen, period, pol, companies = []) {
     } else if ((c.lessee.offKind || 'short') === 'short') push('L-SHORT', c, c.lesseeCo, ps.cost);
     const pen = inP.reduce((a, x) => a + (x.lessee.penalty || 0), 0);
     push('L-CASH', c, c.lesseeCo, inP.reduce((a, x) => a + (x.lessor.cash || 0), 0) + pen, pen ? `解約違約金 ${pen} を含む` : '');
-    // 貸手：将来の受取リース料（決算日後）
+    const isFL = sched.meta.lessorModel === 'finance';
+    // 貸手：将来の受取リース料（決算日後）。ファイナンス・リースはリース投資資産のリース料債権部分の回収予定額
     if (alive) {
       for (const x of sched.months) {
         if (x.m <= period.end || !x.lessor.cash) continue;
         const b = BUCKETS.find((y) => x.m - period.end >= y.from && x.m - period.end <= y.to);
-        if (b) push(`R-MAT.${b.key}`, c, c.lessorCo, x.lessor.cash);
+        if (b) push(`${isFL ? 'R-FMAT' : 'R-MAT'}.${b.key}`, c, c.lessorCo, x.lessor.cash);
+      }
+    }
+    if (isFL) {
+      // リース投資資産の内訳（期末）と受取利息相当額（当期）
+      push('R-INT', c, c.lessorCo, ps.inc);
+      const started = period.end >= ymToIndex(c.commencement);
+      if (alive && started && period.end < sched.meta.lastIdx) {
+        const fut = sched.months.filter((x) => x.m > period.end).reduce((a, x) => a + (x.lessor.cash || 0), 0);
+        const NI = endRec.lessor.NI_end || 0, res = sched.meta.flResidual;
+        push('R-INV.pay', c, c.lessorCo, fut);
+        push('R-INV.res', c, c.lessorCo, res);
+        push('R-INV.unearned', c, c.lessorCo, NI - fut - res, '将来のリース料＋見積残存価額−リース投資資産');
       }
     }
     const lr = c.lessor || {};
-    if (lr.assetCost > 0 && ['building', 'land'].includes(c.assetClass)) {
+    if (!isFL && lr.assetCost > 0 && ['building', 'land'].includes(c.assetClass)) {
       const ratio = lr.ratio ?? 1;
       if (alive) push('X-RE', c, c.lessorCo, R(lr.assetCost * ratio) - R((endRec.lessor.assetAcc_end || 0) * ratio));
       const dep = lessorDepBetween(sched, period.start, period.end, ratio, R);
