@@ -5,7 +5,7 @@ import { extraContracts, extraCompany } from './sampleExtra.js';
 import { moreContracts, moreCompanies, financeLeaseContracts } from './sampleMore.js';
 
 /** テスト物件の版（物件を追加したら上げる。保存済みのデータに未登録のテスト物件を一度だけ自動で追加するために使う） */
-export const TEST_DATA_VERSION = 3;
+export const TEST_DATA_VERSION = 4; // 4：注記の収集値のテストデータを追加
 
 export function sampleData() {
   return {

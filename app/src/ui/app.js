@@ -106,7 +106,10 @@ export function flashTo(id) {
   setTimeout(() => {
     const el = document.getElementById(id);
     if (!el) return;
-    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // 画面外の描画を省いているカードは、表示されると高さが変わるため、即時に移動してから位置を補正する
+    el.scrollIntoView({ block: 'start' });
+    requestAnimationFrame(() => requestAnimationFrame(() => el.scrollIntoView({ block: 'start' })));
+    setTimeout(() => el.scrollIntoView({ block: 'start' }), 250);
     el.classList.add('flash');
     setTimeout(() => el.classList.remove('flash'), 2200);
   }, 60);
@@ -133,14 +136,39 @@ function stepState(p, ctx) {
   }
 }
 
-function subItems(p, ctx) {
-  const { data, checks, pol } = ctx;
-  if (p.id === 'policies') return POLICIES.map((d) => ({ label: `${d.id} ${d.title}${pol[d.id] !== d.default ? '（変更）' : ''}`, go: () => flashTo(d.id) }));
-  if (p.id === 'checks') return checks.filter((c) => c.status !== 'ok').map((c) => ({ label: `${c.status === 'ng' ? '✕' : '!'} ${c.id} ${c.title.replace(/（.*$/, '')}`, go: () => flashTo(c.id) }));
-  return [];
+/**
+ * 画面内の移動先（表示中の画面の見出し付きのカード・表）を、描画した画面から集める。
+ * id のない要素には並び順で id を付ける（再描画しても同じ id になる）。
+ */
+function pageSections(main) {
+  if (!main) return [];
+  const out = [];
+  const els = [...main.querySelectorAll(':scope .page > .card, :scope .page > section.card, :scope .page > details.card, :scope .page > .grid2 > .card, :scope > .page > div > section.card, [data-nav]')]
+    .sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+  let i = 0;
+  const seen = new Set();
+  for (const el of els) {
+    if (seen.has(el)) continue;
+    seen.add(el);
+    const head = el.querySelector(':scope > h2, :scope > summary, :scope > h3, :scope > .card-title');
+    const title = el.dataset.nav || (head?.querySelector('b')?.textContent || head?.textContent || '').trim();
+    i++;
+    if (!title) continue;
+    if (!el.id) el.id = `sec-${i}`;
+    out.push({ id: el.id, label: title.replace(/\s+/g, ' ').slice(0, 34) + (title.length > 34 ? '…' : '') });
+  }
+  return out;
 }
 
-function sidebar(page, ctx) {
+function subItems(p, ctx, main) {
+  const { data, checks, pol } = ctx;
+  if (p.id === 'policies') return POLICIES.map((d) => ({ label: `${d.id} ${d.title}${pol[d.id] !== d.default ? '（変更）' : ''}`, go: () => flashTo(d.id) }));
+  if (p.id === 'checks') return [...pageSections(main).map((x) => ({ label: x.label, go: () => flashTo(x.id) })), ...checks.filter((c) => c.status !== 'ok').map((c) => ({ label: `${c.status === 'ng' ? '✕' : '!'} ${c.id} ${c.title.replace(/（.*$/, '')}`, go: () => flashTo(c.id) }))];
+  // その他の画面：画面内の見出し付きのカード・表へ移動する（契約・会社が多く縦に長くなるため）
+  return pageSections(main).map((x) => ({ label: x.label, go: () => flashTo(x.id) }));
+}
+
+function sidebar(page, ctx, main) {
   const tree = h('ol', { class: 'nav-tree' });
   for (const p of PAGES.filter((x) => x.step)) {
     const stt = stepState(p, ctx);
@@ -149,9 +177,14 @@ function sidebar(page, ctx) {
       h('a', { class: 'nav-head', href: `#${p.id}`, 'aria-current': on ? 'page' : null },
         h('span', { class: 'nav-no' }, String(p.step)), h('span', { class: 'nav-label' }, p.label),
         stt ? h('span', { class: `nav-st ${stt.cls}`, title: stt.cls === 'ok' ? '入力済み' : stt.cls === 'warn' ? '確認事項の件数' : '未入力' }, stt.text) : null));
-    const subs = subItems(p, ctx);
+    const subs = on ? subItems(p, ctx, main) : [];
     if (subs.length && on) {
-      li.append(h('ul', { class: 'nav-sub' }, subs.map((x) => h('li', null, h('a', { href: `#${p.id}`, class: x.on ? 'on' : '', 'aria-current': x.on ? 'true' : null, on: { click: (e) => { e.preventDefault(); guard(x.go); } } }, h('span', { class: 'nav-dot' }), x.label)))));
+      li.append(h('div', { class: 'nav-sub-cap small muted' }, 'この画面内の移動'), h('ul', { class: 'nav-sub' }, subs.map((x) => h('li', null, h('a', { href: `#${p.id}`, class: x.on ? 'on' : '', 'aria-current': x.on ? 'true' : null, on: { click: (e) => {
+        e.preventDefault();
+        // スマホではメニューを閉じてから移動する
+        if (state.ui.menuOpen) { state.ui.menuOpen = false; document.getElementById('sidebar')?.classList.remove('open'); }
+        guard(x.go);
+      } } }, h('span', { class: 'nav-dot' }), x.label)))));
     }
     tree.append(li);
   }
@@ -256,7 +289,7 @@ function render() {
   }
   const panel = h('aside', { class: 'panel', id: 'calc-panel', 'aria-label': '計算の確認' });
   const scrollY = window.scrollY;
-  clear(root).append(header(), h('div', { class: 'layout' }, sidebar(page, ctx), main, panel));
+  clear(root).append(header(), h('div', { class: 'layout' }, sidebar(page, ctx, main), main, panel));
   mountPanel(panel);
   if (render.lastPage === page.id) window.scrollTo(0, scrollY);
   render.lastPage = page.id;

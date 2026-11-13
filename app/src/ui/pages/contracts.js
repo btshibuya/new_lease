@@ -313,7 +313,7 @@ function editor(c, data) {
       h('a', { class: 'btn', href: '#journals' }, '次へ：仕訳を確かめる →'),
       dirtyMark));
   const lockNote = (data.locks || []).length ? h('div', { class: 'alert alert-warn' }, `確定済みの期間が ${(data.locks || []).length} 件あります。確定済み期間の数値が変わる変更をすると、検算 CHK-13 が NG になります。条件変更は変更日以降の期間に反映されるよう入力してください。`) : null;
-  return h('section', { class: 'card', id: 'contract-editor' }, h('h2', null, `契約の編集：${c.id} ${c.name}`), lockNote, form);
+  return h('section', { class: 'card', id: 'contract-editor', 'data-nav': '契約の編集' }, h('h2', null, `契約の編集：${c.id} ${c.name}`), lockNote, form);
 }
 
 const withId = (id, el) => { el.id = id; return el; };
@@ -330,7 +330,7 @@ function paymentCard(c) {
     return h('tr', { class: draft.has(ym) ? 'selected' : '' }, h('td', { class: 'num' }, p.no), h('td', { class: 'nw' }, indexToJp(p.month)), amt(p.amount), h('td', null, inp));
   });
   const outside = (c.paymentOverrides || []).filter((x) => !plan.payments.some((p) => indexToYm(p.month) === x.ym));
-  return h('section', { class: 'card', id: 'payment-schedule' }, h('h2', null, `返済スケジュール（支払額）の手修正：${c.id}`),
+  return h('section', { class: 'card', id: 'payment-schedule', 'data-nav': '返済スケジュール（支払額）の手修正' }, h('h2', null, `返済スケジュール（支払額）の手修正：${c.id}`),
     h('div', { class: 'alert alert-info' }, '支払月ごとに支払額を直せます。直した支払額でリース負債（現在価値）・利息・償却・貸手の受取リース料（定額法）を計算し直し、仕訳・開始仕訳・注記にも反映します。段階賃料・フリーレントで表せる場合は、契約の編集画面で入力してください。手修正は検算 CHK-18 に記録されます。'),
     outside.length ? h('div', { class: 'alert alert-warn' }, `支払日ではない月の手修正があります（反映されません）：${outside.map((x) => x.ym).join('、')}`) : null,
     h('div', { class: 'tbl-wrap scroll-y' }, h('table', { class: 'tbl compact' }, h('thead', null, h('tr', null, ['回', '支払月', '契約条件の支払額', '手修正後の支払額'].map((t) => h('th', null, t)))), h('tbody', null, rows))),
@@ -413,7 +413,7 @@ function reportCard(c, sc, ctx) {
   const totalRow = { label: '合計', event: '', pay: tot('pay'), principal: tot('principal'), int: tot('int'), L: null, X: null, cost: null, dep: tot('dep'), acc: null, assets: null, liabs: null, equity: null, other: tot('other'), lesseeExp: tot('lesseeExp'), inc: tot('inc'), R: null, NI: null, BV: null, plEffect: tot('plEffect'), cumE: null, total: true, months: mo };
   const exportCsv = () => download(`返済・償却スケジュール_${c.id}_${rep.unit === 'month' ? '月次' : '年度'}.csv`, toCsv([cols.map((x) => x.label), ...[...rows, totalRow].map((r) => cols.map((x) => (x.key ? r[x.key] ?? '' : r.event || '')))]), 'text/csv;charset=utf-8');
   const pre = tot('prePay');
-  return h('section', { class: 'card', id: 'contract-monthly' },
+  return h('section', { class: 'card', id: 'contract-monthly', 'data-nav': '返済・償却スケジュールと財務諸表への影響（月次・年度）' },
     h('h2', null, `返済・償却スケジュールと財務諸表への影響：${c.id}`),
     h('div', { class: 'actions' }, h('span', { class: 'fg-label' }, '表示単位'), seg,
       h('button', { class: 'btn', type: 'button', on: { click: exportCsv } }, '表を書き出す（CSV）'),

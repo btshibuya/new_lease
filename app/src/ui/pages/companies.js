@@ -47,6 +47,7 @@ export function renderCompanies(ctx) {
     toast('保存しました');
   };
   return h('div', { class: 'page' },
+    h('div', { 'data-nav': '会社の一覧（税率・持分比率・適用初年度など）', id: 'company-list' }),
     card(null,
       h('div', { class: 'alert alert-info' }, '法定実効税率は税効果（POL-02）、非支配株主持分比率は非支配株主持分への按分（POL-01）に使います。「繰延税金資産の計上割合」は、回収可能性により個別で繰延税金資産を一部しか計上していない場合に設定します（取消額に反映）。「適用初年度」は、適用開始前に開始した契約の借手の測定に使います（累積的影響方式：適用開始時の残高から測定、完全遡及：リース開始時から測定）。「旧科目名」は個別で「リース資産／リース債務」の科目を使っている会社（個社修正 IND-01 で組替）、「流動区分なし」は個別でリース負債を流動・固定に区分していない会社（IND-02）です。'),
       h('div', { class: 'tbl-wrap', on: { input: markDirty, change: markDirty } }, h('table', { class: 'tbl form-table' },

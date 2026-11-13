@@ -396,6 +396,11 @@ body:has(.save-bar) .return-box { bottom: 84px; }
 /* 会社名が長くてもプルダウンが画面からはみ出さないように（スマホ幅） */
 label select { max-width: min(100%, calc(100vw - 96px)); }
 label { max-width: 100%; }
-/* 注記の表：枠の中でスクロールし、見出し行を枠の上端に固定する */
-.notes-scroll { max-height: 70vh; overflow: auto; }
-.notes-scroll thead th { position: sticky; top: 0; z-index: 2; }
+/* 注記：区分ごとの表 */
+.note-sec { margin: 14px 0 6px; }
+.note-sec-title { font-size: 14px; margin: 0 0 6px; color: var(--navy); }
+/* 横スクロールで左端の列を固定するとき、見出しの左端のセルも見出しの色で前面に出す（見出しがずれて見えないように） */
+.tbl.ws-table thead th:first-child { background: var(--soft-2); z-index: 3; }
+.nav-sub-cap { margin: 6px 0 2px 34px; font-size: 11px; }
+/* 画面内の移動で、移動先の見出しが画面の上端に隠れないように */
+.page .card, .note-sec, [data-nav] { scroll-margin-top: 12px; }

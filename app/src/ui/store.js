@@ -1,6 +1,14 @@
 // アプリの状態管理。ブラウザの localStorage に保存（利用者ごとの端末内のみ）。
 // localStorage が使えない環境（プライベートモード等）でも動作するよう、すべて try/catch で保護する。
 import { sampleData, TEST_DATA_VERSION } from '../engine/sample.js';
+import { sampleNoteInputs } from '../engine/sampleNotes.js';
+
+/** サンプルデータ（注記の収集値のテストデータつき） */
+function fullSample(pol) {
+  const d = sampleData();
+  try { d.noteInputs = sampleNoteInputs(d, pol); } catch { d.noteInputs = {}; }
+  return d;
+}
 
 import { sanitizeData, appendLog, chainHash, sanitizeCompany, sanitizeContract } from '../engine/data.js';
 import { defaultPolicies, sanitizePolicies } from '../engine/policies.js';
@@ -44,20 +52,22 @@ export function init() {
       // 以前の版で保存されたデータには、追加したテスト物件がない。未登録のものだけを一度だけ自動で追加する（既存は変更・削除しない）
       if ((state.data.config.testDataVersion || 0) < TEST_DATA_VERSION) {
         const r = mergeTestData();
+        const n = mergeTestNotes();
         state.data.config.testDataVersion = TEST_DATA_VERSION;
-        if (r.contracts.length || r.companies.length) state.loadNotice = `以前の版で保存されたデータに、テスト物件（会社 ${r.companies.length}社・契約 ${r.contracts.length}件）を追加しました。登録済みの会社・契約は変更・削除していません。テスト物件が不要な場合は契約一覧から削除できます（削除したものは再び追加されません）。`;
+        const parts = [r.contracts.length || r.companies.length ? `テスト物件（会社 ${r.companies.length}社・契約 ${r.contracts.length}件）` : '', n ? `注記の収集値のテストデータ（${n}件）` : ''].filter(Boolean);
+        if (parts.length) state.loadNotice = `以前の版で保存されたデータに、${parts.join('と')}を追加しました。登録済みの会社・契約・収集値は変更・削除していません。不要な場合は削除できます（削除したものは再び追加されません）。`;
       }
       state.ui = { ...state.ui, ...(raw.ui && typeof raw.ui === 'object' ? { granularity: GRANULARITIES.includes(raw.ui.granularity) ? raw.ui.granularity : 'year', periodIndex: Number.isInteger(raw.ui.periodIndex) ? raw.ui.periodIndex : null, palette: ['bt', 'blue', 'lightblue', 'green', 'red', 'teal', 'dark'].includes(raw.ui.palette) ? raw.ui.palette : 'bt' } : {}) };
     } catch (e) {
       // 読込に失敗しても元のデータは消さず、別のキーに退避してから初期状態で開く
       try { localStorage.setItem(`${KEY}.backup.${Date.now()}`, JSON.stringify(raw)); } catch { /* 退避できない場合も続行 */ }
       state.loadError = `保存データを読み込めなかったため、退避してサンプルデータで開きました（${e.message}）。退避したデータは「データ管理」から書き出せます。`;
-      state.data = sampleData();
       state.policies = defaultPolicies();
+      state.data = fullSample(state.policies);
     }
   } else {
-    state.data = sampleData();
     state.policies = defaultPolicies();
+    state.data = fullSample(state.policies);
     appendLog(state.data.auditLog, '初期化', 'サンプルデータを読み込みました');
   }
   save();
@@ -105,6 +115,25 @@ export function addTestData() {
   return r;
 }
 
+/** 注記の収集値のテストデータのうち、未入力のもの（期間・会社・項目）だけを追加する。戻り値：追加した件数 */
+function mergeTestNotes() {
+  let add;
+  try { add = sampleNoteInputs(state.data, state.policies); } catch { return 0; }
+  const cur = state.data.noteInputs || (state.data.noteInputs = {});
+  const codes = new Set(state.data.companies.map((c) => c.code));
+  let n = 0;
+  for (const [pk, byCo] of Object.entries(add)) for (const [co, byKey] of Object.entries(byCo)) {
+    if (!codes.has(co)) continue;
+    for (const [k, v] of Object.entries(byKey)) {
+      const t = ((cur[pk] ||= {})[co] ||= {});
+      if (t[k]) continue;
+      t[k] = v; n++;
+    }
+  }
+  if (n) appendLog(state.data.auditLog, '注記の収集値のテストデータの追加（自動）', `${Object.keys(add).join('、')}：${n}件（未入力の項目だけ）`);
+  return n;
+}
+
 /** 未登録のテスト物件を state.data に追加する（log=true のときは画面の操作として監査ログに記録して再描画） */
 function mergeTestData(viaUpdate = false) {
   const s = sampleData();
@@ -131,7 +160,7 @@ function mergeTestData(viaUpdate = false) {
 export function resetSample() {
   const log = state.data?.auditLog || [];
   const anchor = state.data?.auditAnchor || '';
-  state.data = sampleData();
+  state.data = fullSample(state.policies);
   state.data.auditLog = log;
   state.data.auditAnchor = anchor;
   appendLog(state.data.auditLog, 'サンプル復元', 'サンプルデータに置き換えました');

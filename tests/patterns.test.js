@@ -115,3 +115,21 @@ test('貸手のファイナンス・リースの入力制限：条件変更・�
   assert.ok(errs({ lessor: { ...base.lessor, ratio: 0.5 } }).some((e) => /按分比率/.test(e)));
   assert.ok(errs({ lessee: { ...base.lessee, model: 'asc842ol' } }).some((e) => /借手の会計モデル/.test(e)));
 });
+
+test('注記の収集値のテストデータ：全社・全項目が収集済み（文章の項目は備考）で、連結の注記額＝各社の注記額の合計−グループ内分', async () => {
+  const { sampleNoteInputs } = await import('../app/src/engine/sampleNotes.js');
+  const { consolidatedNotes, notePeriodKey } = await import('../app/src/engine/notes.js');
+  const pol = defaultPolicies();
+  const inputs = sampleNoteInputs(d, pol);
+  assert.deepEqual(Object.keys(inputs), ['2028-03', '2029-03', '2030-03']);
+  const p = buildPeriods(ymToIndex('2027-04'), ymToIndex('2030-03'), 3, 'year')[0];
+  const g = groupNoteAmounts(generateAll(d, p, pol), p, pol, d.companies);
+  const rows = consolidatedNotes(g, inputs[notePeriodKey(p)]);
+  for (const r of rows) {
+    if (r.item.kind === 'text') { assert.equal(r.memos.length, d.companies.length, r.key); continue; }
+    assert.notEqual(r.total, null, `${r.key} が未収集`);
+    assert.equal(r.consolidated, r.total - r.group, r.key);
+  }
+  // 同じデータからは同じテストデータになる（乱数を使わない）
+  assert.deepEqual(sampleNoteInputs(d, pol), inputs);
+});

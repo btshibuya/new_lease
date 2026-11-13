@@ -1,4 +1,4 @@
-import { h, card, table, amt, statusBadge, download, ask, toast, select, saveFile } from '../dom.js';
+import { h, card, table, amt, statusBadge, download, ask, toast, select, saveFile, calcable } from '../dom.js';
 import { COLORS } from '../components.js';
 import { waterfall, barChart } from '../charts.js';
 import { worksheet, MUST_BE_ZERO, cashFlowEliminations } from '../../engine/reports.js';
@@ -405,10 +405,11 @@ function renderNotes(ctx) {
   };
 
   // 表：区分の見出し → 注記項目（説明つき）→ 内訳（科目別・期間別）
-  const tbody = [];
   const numTd = (v, calc, strong) => (v === null ? h('td', { class: 'num muted' }, '未収集') : amt(v, { calc, strong }));
+  // 注記は区分（情報の種類）ごとに表を分ける。各表に見出しを付け、画面内の移動（左のメニュー）から飛べるようにする
+  const secTables = [];
   for (const sec of NOTE_SECTIONS) {
-    tbody.push(h('tr', { class: 'sec' }, h('th', { colspan: 7 }, `【${sec.side}】${sec.title}（${sec.ref}）`)));
+    const tbody = [];
     const items = [...new Set(rows.filter((r) => r.item.sec === sec.id).map((r) => r.item))];
     for (const it of items) {
       const rs = rows.filter((r) => r.item === it);
@@ -416,6 +417,15 @@ function renderNotes(ctx) {
       const descTd = () => h('td', { class: 'small' }, h('span', { class: badgeCls }, KIND[it.kind]), ' ', it.desc);
       if (!(it.byClass || it.byBucket || it.byList)) {
         const r = rs[0];
+        if (it.kind === 'text') {
+          // 文章で記載する注記：金額ではなく、各社の備考（文章）を集める。記入した会社数を示し、押すと文章を表示する
+          const memoInfo = () => ({ context: `注記・${period.label}`, title: `${it.title}（各社の備考）`, value: `${r.memos.length}社`,
+            breakdown: { title: `各社の備考（${r.memos.length}社）`, cols: [{ label: '会社', key: 'name' }, { label: '備考（文章の注記）', key: 'memo' }], rows: r.memos.map((x) => ({ name: `${x.co} ${coName(x.co)}`, memo: x.memo })) },
+            notes: [it.desc], sources: [{ label: '各社の収集表' }] });
+          const memoTd = () => { const td = h('td', { class: r.memos.length ? 'small' : 'num muted' }, r.memos.length ? `文章（${r.memos.length}社が記入）` : '未収集'); if (r.memos.length) calcable(td, memoInfo); return td; };
+          tbody.push(h('tr', null, h('td', null, h('b', null, it.title)), h('td', null, it.when), memoTd(), amt(r.group, { calc: info(r, 'group') }), amt(r.adj, { calc: info(r, 'group') }), h('td', { class: 'small muted' }, '文章で記載'), descTd()));
+          continue;
+        }
         tbody.push(h('tr', null, h('td', null, h('b', null, it.title)), h('td', null, it.when), numTd(r.total, info(r, 'total')), amt(r.group, { calc: info(r, 'group') }), amt(r.adj, { calc: info(r, 'group') }), numTd(r.consolidated, info(r, 'cons'), true), descTd()));
         continue;
       }
@@ -432,10 +442,14 @@ function renderNotes(ctx) {
       if (!shown.length) tbody.push(h('tr', { class: 'sub' }, h('td', { class: 'indent muted' }, '該当なし'), ...Array.from({ length: 6 }, () => h('td', null, ''))));
       for (const r of shown) tbody.push(h('tr', { class: 'sub' }, h('td', { class: 'indent' }, r.sub), h('td', null, ''), numTd(r.total, info(r, 'total')), amt(r.group, { calc: info(r, 'group') }), amt(r.adj, { calc: info(r, 'group') }), numTd(r.consolidated, info(r, 'cons'), true), h('td', null, '')));
     }
+    if (!tbody.length) continue;
+    secTables.push(h('section', { class: 'note-sec', id: `note-${sec.id}`, 'data-nav': `注記：【${sec.side}】${sec.title}` },
+      h('h3', { class: 'note-sec-title' }, `【${sec.side}】${sec.title}`, h('span', { class: 'muted small' }, `（${sec.ref}）`)),
+      h('div', { class: 'tbl-wrap' }, h('table', { class: 'tbl ws-table ws-notes' },
+        h('thead', null, h('tr', null, ['注記項目', '時点', '各社の注記額の合計（収集値）', 'うちグループ内リース', '連結注記での調整', '連結の注記額', 'どのような情報か（根拠）'].map((t) => h('th', null, t)))),
+        h('tbody', null, tbody)))));
   }
-  const tableEl = h('div', { class: 'tbl-wrap notes-scroll' }, h('table', { class: 'tbl ws-table ws-notes' },
-    h('thead', null, h('tr', null, ['注記項目', '時点', '各社の注記額の合計（収集値）', 'うちグループ内リース', '連結注記での調整', '連結の注記額', 'どのような情報か（根拠）'].map((t) => h('th', null, t)))),
-    h('tbody', null, tbody)));
+  const tableEl = h('div', { class: 'note-secs' }, secTables);
 
   // 記入済みの収集表の読込：誤りがあれば何も読み込まない
   const fileInput = h('input', { type: 'file', accept: '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.csv,text/csv', hidden: true, on: { change: async (e) => {
