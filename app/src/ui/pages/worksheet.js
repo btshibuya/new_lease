@@ -1,8 +1,8 @@
-import { h, card, table, amt, statusBadge, download, ask, toast, select } from '../dom.js';
+import { h, card, table, amt, statusBadge, download, ask, toast, select, saveFile } from '../dom.js';
 import { COLORS } from '../components.js';
 import { waterfall, barChart } from '../charts.js';
 import { worksheet, MUST_BE_ZERO, cashFlowEliminations } from '../../engine/reports.js';
-import { NOTE_SECTIONS, BUCKETS, groupNoteAmounts, consolidatedNotes, noteCollectionCsv, importNoteCollection, notePeriodKey, noteRows } from '../../engine/notes.js';
+import { NOTE_SECTIONS, BUCKETS, groupNoteAmounts, consolidatedNotes, noteCollectionCsv, noteCollectionXlsx, importNoteCollection, importNoteCollectionXlsx, notePeriodKey, noteRows } from '../../engine/notes.js';
 import { update } from '../store.js';
 import { focusJournals } from './journals.js';
 import { contentOrder } from '../components.js';
@@ -433,19 +433,23 @@ function renderNotes(ctx) {
       for (const r of shown) tbody.push(h('tr', { class: 'sub' }, h('td', { class: 'indent' }, r.sub), h('td', null, ''), numTd(r.total, info(r, 'total')), amt(r.group, { calc: info(r, 'group') }), amt(r.adj, { calc: info(r, 'group') }), numTd(r.consolidated, info(r, 'cons'), true), h('td', null, '')));
     }
   }
-  const tableEl = h('div', { class: 'tbl-wrap' }, h('table', { class: 'tbl ws-table ws-notes' },
+  const tableEl = h('div', { class: 'tbl-wrap notes-scroll' }, h('table', { class: 'tbl ws-table ws-notes' },
     h('thead', null, h('tr', null, ['注記項目', '時点', '各社の注記額の合計（収集値）', 'うちグループ内リース', '連結注記での調整', '連結の注記額', 'どのような情報か（根拠）'].map((t) => h('th', null, t)))),
     h('tbody', null, tbody)));
 
   // 記入済みの収集表の読込：誤りがあれば何も読み込まない
-  const fileInput = h('input', { type: 'file', accept: '.csv,text/csv', hidden: true, on: { change: async (e) => {
+  const fileInput = h('input', { type: 'file', accept: '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.csv,text/csv', hidden: true, on: { change: async (e) => {
     const f = e.target.files[0]; e.target.value = '';
     if (!f) return;
-    if (f.size > 5 * 1024 * 1024) return toast('ファイルが大きすぎます（上限5MB）', 'error');
+    if (f.size > 10 * 1024 * 1024) return toast('ファイルが大きすぎます（上限10MB）', 'error');
     const buf = await f.arrayBuffer();
-    let text;
-    try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch { text = new TextDecoder('shift_jis').decode(buf); }
-    const r = importNoteCollection(text, companies, period);
+    let r;
+    if (/\.xlsx$/i.test(f.name) || new Uint8Array(buf.slice(0, 2)).join() === '80,75') r = await importNoteCollectionXlsx(new Uint8Array(buf), companies, period); // Excel（ZIP 形式）
+    else {
+      let text;
+      try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch { text = new TextDecoder('shift_jis').decode(buf); }
+      r = importNoteCollection(text, companies, period);
+    }
     if (r.errors.length) {
       await ask({ title: `読み込めませんでした（誤り ${r.errors.length}件）`, message: 'ファイルを直してから、もう一度読み込んでください。何も読み込んでいません。', body: h('ul', { class: 'err-list' }, r.errors.slice(0, 30).map((x) => h('li', null, x))), okLabel: '閉じる' });
       return;
@@ -489,12 +493,13 @@ function renderNotes(ctx) {
   };
   return card('注記（新リース会計基準）',
     h('div', { class: 'alert alert-info' }, '開示目的は、リースが財政状態・経営成績・キャッシュ・フローに与える影響を財務諸表利用者が評価するための情報を提供することです（会計基準第54項）。会計方針に関する情報（適用指針第97項）は文章で記載するため、この表の対象外です。重要性に乏しい事項は記載を省略できます（会計基準第55項ただし書き）。'),
-    h('div', { class: 'alert alert-info' }, '連結の注記額＝各社の個別の注記額の合計−うちグループ内リース分。①「収集表を書き出す」で各社に配る表（項目ごとに、どのような情報か・根拠の項を記載）を作り、②各社が「各社の注記額」（グループ会社とのリースも含めた個別の注記額）と、アプリで計算しない項目の「うちグループ会社とのリース分」を記入し、③「記入済みの収集表を読み込む」で取り込みます。「アプリで計算」の項目のグループ内リース分は契約から自動で計算します。金額を押すと会社・契約ごとの内訳を表示します。'),
+    h('div', { class: 'alert alert-info' }, '連結の注記額＝各社の個別の注記額の合計−うちグループ内リース分。①「収集用Excelを書き出す」で各社に配る Excel（シート2枚：「注記の収集表」と「記入方法・チェック」）を作り、②各社が黄色のセルに「各社の注記額」（グループ会社とのリースも含めた個別の注記額）と、アプリで計算しない項目の「うちグループ会社とのリース分」を記入し、③「記入済みのExcelを読み込む」で取り込みます（CSV 版も読み込めます）。「アプリで計算」の項目のグループ内リース分は契約から自動で計算します。金額を押すと会社・契約ごとの内訳を表示します。'),
     h('div', { class: 'actions' },
       // 収集表は全社まとめて、または会社ごとに（各社に配るため）書き出せる
       h('label', null, '対象 ', select([['all', 'すべての会社（1ファイル）'], ...companies.map((c) => [c.code, `${c.code} ${c.name}`])], noteView.co, (v) => { noteView.co = v; })),
-      h('button', { class: 'btn btn-primary', type: 'button', on: { click: () => { const cs = noteView.co === 'all' ? companies : companies.filter((c) => c.code === noteView.co); download(`注記の収集表_${period.label}${noteView.co === 'all' ? '' : `_${noteView.co}`}.csv`, noteCollectionCsv(cs, period, g, inputs), 'text/csv;charset=utf-8'); } } }, '① 収集表を書き出す（CSV）'),
-      h('button', { class: 'btn', type: 'button', on: { click: () => fileInput.click() } }, '③ 記入済みの収集表を読み込む'), fileInput,
+      h('button', { class: 'btn btn-primary', type: 'button', title: '各社に配る収集用の Excel（シート2枚：注記の収集表／記入方法・チェック）。黄色のセルだけ入力できます', on: { click: () => { const cs = noteView.co === 'all' ? companies : companies.filter((c) => c.code === noteView.co); saveFile(`注記の収集表_${period.label}${noteView.co === 'all' ? '' : `_${noteView.co}`}.xlsx`, noteCollectionXlsx(cs, period, g, inputs), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); } } }, '① 収集用Excelを書き出す'),
+      h('button', { class: 'btn', type: 'button', on: { click: () => fileInput.click() } }, '③ 記入済みのExcelを読み込む'), fileInput,
+      h('button', { class: 'btn btn-sm', type: 'button', title: 'Excel を使わない場合の収集表（CSV）。読込は Excel・CSV のどちらも可', on: { click: () => { const cs = noteView.co === 'all' ? companies : companies.filter((c) => c.code === noteView.co); download(`注記の収集表_${period.label}${noteView.co === 'all' ? '' : `_${noteView.co}`}.csv`, noteCollectionCsv(cs, period, g, inputs), 'text/csv;charset=utf-8'); } } }, '収集表（CSV版）'),
       h('button', { class: 'btn', type: 'button', on: { click: exportTable } }, '注記の表を書き出す（CSV）'),
       collected ? h('button', { class: 'btn btn-danger', type: 'button', on: { click: async () => { if (await ask({ title: `${period.label}の収集値を消去しますか？`, message: `${collected}社分の収集値を消去します。グループ内リース分（アプリの計算値）は消えません。`, okLabel: '消去する', danger: true })) update((d) => { delete d.noteInputs[pk]; }, '注記の収集値の消去', period.label); } } }, 'この期間の収集値を消去') : null,
       h('span', { class: 'muted' }, collected ? `収集済み：${collected}社／${companies.length}社` : '収集値はまだありません（各社の注記額の列は「未収集」）')),

@@ -155,21 +155,42 @@ export function download(filename, content, type) {
       navigator.clipboard.writeText(ta.value).then(done, () => { ta.select(); toast('自動でコピーできないため、選択された文字を Ctrl+C（⌘C）でコピーしてください', 'error'); });
     } catch { ta.select(); toast('選択された文字を Ctrl+C（⌘C）でコピーしてください', 'error'); }
   } } }, 'コピー');
-  const save = h('button', { class: 'btn', type: 'button', on: { click: () => {
-    try {
-      const url = URL.createObjectURL(new Blob([content], { type }));
-      const a = h('a', { href: url, download: filename });
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
-    } catch { toast('この環境ではファイルとして保存できません。コピーしてください', 'error'); }
-  } } }, 'ファイルとして保存');
+  const save = h('button', { class: 'btn', type: 'button', on: { click: () => { saveFile(filename, content, type); } } }, 'ファイルとして保存');
   const box = h('div', { class: 'modal ask wide', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'export-title' },
     h('div', { class: 'modal-head' }, h('b', { id: 'export-title' }, `書き出し：${filename}`)), note, ta,
     h('div', { class: 'row ask-actions' }, h('span', { class: 'spacer' }), h('button', { class: 'btn', type: 'button', on: { click: close } }, '閉じる'), save, copy));
   overlay = h('div', { class: 'modal-bg', on: { keydown: (e) => { if (e.key === 'Escape') close(); } } }, box);
   document.body.appendChild(overlay);
   copy.focus();
+}
+
+/**
+ * バイナリのファイル（Excel など）を保存する。公開ページ（claude.ai）では downloads 機能で閲覧者の確認を経て保存し、
+ * それ以外（ローカルで開いた場合など）はブラウザのダウンロードで保存する。
+ * @returns {Promise<boolean>} 保存できたか（閲覧者が取り消した場合は false）
+ */
+export async function saveFile(filename, bytes, type) {
+  let dl = null;
+  try { if (window.claude && typeof window.claude.use === 'function') dl = await window.claude.use('downloads'); } catch { dl = null; }
+  if (dl) {
+    try { await dl.save({ filename, data: new Blob([bytes], { type }) }); toast('保存しました'); return true; } catch (e) {
+      if (e && e.code === 'declined') { toast('保存を取り消しました'); return false; }
+      if (e && e.code === 'rate_limited') { toast('保存の確認がすでに開いています。少し待ってからもう一度押してください', 'error'); return false; }
+      // その他（使えない環境など）はブラウザのダウンロードで試す
+    }
+  }
+  try {
+    const url = URL.createObjectURL(new Blob([bytes], { type }));
+    const a = h('a', { href: url, download: filename });
+    document.body.appendChild(a);
+    a.click();
+    // すぐに URL を無効にすると、ブラウザによってはファイル名が失われるため、少し待ってから片付ける
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 30000);
+    return true;
+  } catch {
+    toast('この環境ではファイルとして保存できません', 'error');
+    return false;
+  }
 }
 
 export function toast(msg, kind = 'info') {
