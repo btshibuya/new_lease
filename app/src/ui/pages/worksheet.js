@@ -391,7 +391,13 @@ function renderNotes(ctx) {
     const title = `${it.title}${r.sub ? `：${r.sub}` : ''}`;
     if (col === 'total') {
       return { context: `注記・${period.label}`, title: `${title}（各社の注記額の合計）`, value: r.total,
-        breakdown: { title: `会社ごとの収集値（${r.totalRows.length}社）`, cols: [{ label: '会社', key: 'name' }, { label: '注記額', key: 'amt', num: true }], rows: [...r.totalRows.map((x) => ({ name: `${x.co} ${coName(x.co)}`, amt: x.amt })), { name: '合計', amt: r.total ?? 0, total: true }] },
+        // 会社ごとに、収集値・うちグループ内分（アプリの計算値または記入値）・グループ外分（差）を並べて確かめられるようにする
+        breakdown: (() => {
+          const grpOf = (co) => (it.kind === 'input' ? inputs[co]?.[r.key]?.group ?? 0 : r.groupRows.filter((x) => x.co === co).reduce((a, x) => a + x.amt, 0));
+          const rs = r.totalRows.map((x) => ({ name: `${x.co} ${coName(x.co)}`, amt: x.amt, grp: grpOf(x.co), ext: x.amt - grpOf(x.co) }));
+          return { title: `会社ごとの収集値と、うちグループ内分（${r.totalRows.length}社）`, cols: [{ label: '会社', key: 'name' }, { label: '各社の注記額（収集値）', key: 'amt', num: true }, { label: 'うちグループ内分', key: 'grp', num: true }, { label: 'グループ外分（差）', key: 'ext', num: true }],
+            rows: [...rs, { name: '合計', amt: r.total ?? 0, grp: rs.reduce((a, x) => a + x.grp, 0), ext: rs.reduce((a, x) => a + x.ext, 0), total: true }] };
+        })(),
         notes: [it.desc, ...r.memos.map((m) => `${m.co} 備考：${m.memo}`)], sources: [{ label: '各社の収集表' }] };
     }
     const isCalc = it.kind === 'calc';

@@ -18,6 +18,9 @@ import { renderWorksheet } from './pages/worksheet.js';
 import { renderChecks } from './pages/checks.js';
 import { renderData } from './pages/data.js';
 import { renderHelp } from './pages/help.js';
+import { focusJournals } from './pages/journals.js';
+import { NOTE_SECTIONS, NOTE_ITEMS } from '../engine/notes.js';
+import { ACCOUNTS, accountLabel } from '../engine/accounts.js';
 
 // 左ツリーの項目。step は作業の順番（番号の丸）。common は最下部の共通項目
 const PAGES = [
@@ -198,10 +201,65 @@ function sidebar(page, ctx, main) {
 // 配色（ビジネストラストが既定）
 export const PALETTES = [['bt', 'ビジネストラスト'], ['blue', 'ブルー'], ['lightblue', 'ライトブルー'], ['green', 'グリーン'], ['red', 'レッド'], ['teal', 'ティール'], ['dark', 'ダーク']];
 
-function header() {
+/**
+ * 横断検索の候補：契約・会社・検算・注記項目・会計方針・勘定科目（元帳）・画面。
+ * 選ぶと該当の画面・欄へ移動する。
+ */
+function searchIndex(ctx) {
+  const out = [];
+  const add = (kind, text, sub, go) => out.push({ kind, text, sub, go, key: `${text} ${sub}`.toLowerCase() });
+  for (const p of PAGES) add('画面', p.label, p.step ? `手順${p.step}` : '', () => { location.hash = `#${p.id}`; });
+  for (const c of ctx.data.contracts) add('契約', `${c.id} ${c.name}`, `${c.lessorCo} → ${c.lesseeCo}`, () => goTo({ page: 'contracts', contractId: c.id, target: 'contract-editor' }));
+  for (const c of ctx.data.companies) add('会社', `${c.code} ${c.name}`, '会社マスタ', () => goTo({ page: 'companies', company: c.code }));
+  for (const c of ctx.checks) add('検算', `${c.id} ${c.title}`, c.status === 'ng' ? 'NG' : c.status === 'warn' ? '確認事項あり' : 'OK', () => goTo({ page: 'checks', target: c.id }));
+  for (const d of POLICIES) add('会計方針', `${d.id} ${d.title}`, '', () => goTo({ page: 'policies', target: d.id }));
+  for (const it of NOTE_ITEMS) { const sec = NOTE_SECTIONS.find((x) => x.id === it.sec); add('注記', it.title, sec ? `【${sec.side}】${sec.title}` : '', () => goTo({ page: 'worksheet', target: `note-${it.sec}` })); }
+  const accs = new Set();
+  for (const j of ctx.gen.journals) for (const l of j.lines) accs.add(accountLabel(l, ctx.pol, ctx.names));
+  for (const a of [...accs].sort()) add('元帳', a, '仕訳帳の元帳で開く', () => focusJournals({ account: a }));
+  return out;
+}
+
+function searchBox(ctx) {
+  let index = null;
+  const list = h('ul', { class: 'gsearch-list', role: 'listbox', hidden: true });
+  const input = h('input', { type: 'search', class: 'gsearch-input', placeholder: '検索（契約・会社・検算・注記・科目…）', 'aria-label': 'アプリ内を検索', autocomplete: 'off' });
+  let items = [], cur = 0;
+  const close = () => { list.hidden = true; };
+  const pick = (x) => { close(); input.value = ''; input.blur(); guard(x.go); };
+  const draw = () => {
+    const q = input.value.trim().toLowerCase();
+    if (!q) { close(); return; }
+    index ||= searchIndex(ctx);
+    const words = q.split(/\s+/);
+    // 並び順：番号・コードが完全に一致 → 先頭が一致 → その他（同じ順位の中は種類の並び）
+    const rank = (x) => { const head = x.text.toLowerCase().split(/\s+/)[0]; return head === q ? 0 : x.text.toLowerCase().startsWith(q) ? 1 : 2; };
+    items = index.filter((x) => words.every((w) => x.key.includes(w))).map((x, i) => ({ x, i, r: rank(x) })).sort((a, b) => a.r - b.r || a.i - b.i).map((y) => y.x).slice(0, 12);
+    cur = 0;
+    list.replaceChildren(...(items.length ? items.map((x, i) => h('li', { role: 'option', class: i === cur ? 'on' : '', on: { mousedown: (e) => { e.preventDefault(); pick(x); } } },
+      h('span', { class: 'badge' }, x.kind), ' ', h('b', null, x.text), x.sub ? h('span', { class: 'muted small' }, `　${x.sub}`) : null)) : [h('li', { class: 'muted small' }, '該当するものはありません')]));
+    list.hidden = false;
+  };
+  input.addEventListener('input', draw);
+  input.addEventListener('focus', draw);
+  input.addEventListener('blur', () => setTimeout(close, 150));
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { input.value = ''; close(); return; }
+    if (list.hidden || !items.length) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      cur = (cur + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length;
+      [...list.children].forEach((li, i) => li.classList.toggle('on', i === cur));
+    } else if (e.key === 'Enter') { e.preventDefault(); pick(items[cur]); }
+  });
+  return h('div', { class: 'gsearch' }, input, list);
+}
+
+function header(ctx) {
   return h('header', { class: 'app-header' },
     h('button', { class: 'btn btn-sm menu-btn', type: 'button', 'aria-controls': 'sidebar', on: { click: () => setUi({ menuOpen: !state.ui.menuOpen }) } }, '☰ メニュー'),
     h('a', { class: 'brand', href: '#dashboard' }, h('img', { src: 'bt-logo.png', alt: 'BUSINESS TRUST', class: 'brand-logo' }), h('span', { class: 'brand-name' }, 'グループ内リース連結仕訳')),
+    ctx ? searchBox(ctx) : null,
     h('div', { class: 'who' }, h('label', { for: 'palette' }, '配色'),
       h('select', { id: 'palette', on: { change: (e) => { document.documentElement.dataset.palette = e.target.value; setUi({ palette: e.target.value }); } } },
         PALETTES.map(([v2, l]) => h('option', { value: v2, selected: state.ui.palette === v2 }, l)))));
@@ -297,7 +355,7 @@ function render() {
       h('option', { value: '' }, `この画面内の移動（${secs.length}か所）`), ...secs.map((x) => h('option', { value: x.id }, x.label)));
     main.querySelector('.step-title')?.after(h('div', { class: 'page-jump' }, sel));
   }
-  clear(root).append(header(), h('div', { class: 'layout' }, nav, main, panel), h('button', { class: 'btn to-top', type: 'button', title: '画面の先頭へ', 'aria-label': '画面の先頭へ', on: { click: () => window.scrollTo({ top: 0, behavior: 'smooth' }) } }, '▲ 先頭へ'));
+  clear(root).append(header(ctx), h('div', { class: 'layout' }, nav, main, panel), h('button', { class: 'btn to-top', type: 'button', title: '画面の先頭へ', 'aria-label': '画面の先頭へ', on: { click: () => window.scrollTo({ top: 0, behavior: 'smooth' }) } }, '▲ 先頭へ'));
   render.secs = secs.map((x) => x.id);
   updateSpy();
   mountPanel(panel);

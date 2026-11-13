@@ -53,21 +53,32 @@ export function renderContracts(ctx) {
   // 契約が多くても画面からあふれないよう、一覧は枠の中でスクロールし、絞り込みもできる
   const listBox = h('div', { class: 'scroll-y list-box' });
   const count = h('span', { class: 'muted' });
-  const drawList = (q = '') => {
+  const drawList = (q = listView.q) => {
+    listView.q = q;
     const t = q.trim().toLowerCase();
-    const shown = t ? data.contracts.filter((c) => [c.id, c.name, c.lessorCo, c.lesseeCo, co(c.lessorCo), co(c.lesseeCo)].some((x) => String(x).toLowerCase().includes(t))) : data.contracts;
-    listBox.replaceChildren(shown.length ? table(cols, shown, { rowClass: (c) => (sel && c.id === sel.id ? 'selected' : '') }) : emptyState(t ? '該当する契約がありません' : '契約がありません。「＋ 契約を追加」または「CSVで一括取込」で登録してください。'));
-    count.textContent = `${t ? `${shown.length}件／全${data.contracts.length}件` : `全${data.contracts.length}件`}${shown.length > 8 ? '（一覧の枠内を下へスクロールすると、すべての契約を表示します）' : ''}`;
+    const fOn = listView.lessor || listView.lessee || listView.model;
+    const shown = data.contracts.filter((c) => (!t || [c.id, c.name, c.lessorCo, c.lesseeCo, co(c.lessorCo), co(c.lesseeCo)].some((x) => String(x).toLowerCase().includes(t)))
+      && (!listView.lessor || c.lessorCo === listView.lessor) && (!listView.lessee || c.lesseeCo === listView.lessee)
+      && (!listView.model || (listView.model === 'lessor_finance' ? c.lessor?.model === 'finance' : c.lessee.model === listView.model)));
+    listBox.replaceChildren(shown.length ? table(cols, shown, { rowClass: (c) => (sel && c.id === sel.id ? 'selected' : '') }) : emptyState(t || fOn ? '該当する契約がありません' : '契約がありません。「＋ 契約を追加」または「CSVで一括取込」で登録してください。'));
+    count.textContent = `${t || fOn ? `${shown.length}件／全${data.contracts.length}件` : `全${data.contracts.length}件`}${shown.length > 8 ? '（一覧の枠内を下へスクロールすると、すべての契約を表示します）' : ''}`;
   };
   drawList();
-  const filter = h('input', { type: 'search', placeholder: '契約番号・契約名・会社で絞り込み', 'aria-label': '契約の絞り込み', class: 'list-filter', on: { input: (e) => drawList(e.target.value) } });
+  const filter = h('input', { type: 'search', placeholder: '契約番号・契約名・会社で絞り込み', 'aria-label': '契約の絞り込み', class: 'list-filter', value: listView.q, on: { input: (e) => drawList(e.target.value) } });
+  // 会社・会計モデルでの絞り込み（契約・会社が多いときに目的の契約を探しやすくする）
+  const coOpts = [['', 'すべて'], ...data.companies.map((x) => [x.code, `${x.code} ${x.name}`])];
+  const fSel = (label, key, opts) => h('label', { class: 'small' }, `${label} `, select(opts, listView[key], (v) => { listView[key] = v; drawList(); }));
+  const filters = h('div', { class: 'row list-filters' },
+    fSel('貸手', 'lessor', coOpts), fSel('借手', 'lessee', coOpts),
+    fSel('会計モデル', 'model', [['', 'すべて'], ['jgaap', '借手：日本基準'], ['asc842ol', '借手：ASC842'], ['offbalance', '借手：短期・少額'], ['lessor_finance', '貸手：ファイナンス・リース']]),
+    h('button', { class: 'btn-link', type: 'button', on: { click: () => { Object.assign(listView, { q: '', lessor: '', lessee: '', model: '' }); filter.value = ''; window.dispatchEvent(new HashChangeEvent('hashchange')); } } }, '絞り込みを解除'));
 
   const fileInput = h('input', { type: 'file', accept: '.csv,text/csv', hidden: true, on: { change: (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) guard(() => importCsv(f, data)); } } });
   const actions = h('div', { class: 'actions' },
     h('button', { class: 'btn btn-primary', type: 'button', on: { click: () => guard(() => { const nc = blankContract(data); update((d) => d.contracts.push(nc), '契約追加', nc.id); setUi({ contractId: nc.id }); }) } }, '＋ 契約を追加'),
     h('button', { class: 'btn', type: 'button', on: { click: () => fileInput.click() } }, 'CSVで一括取込'), fileInput,
-    h('button', { class: 'btn', type: 'button', title: '帳票・速度の確認用に、パターンを網羅したテスト物件（K-008〜K-051・子会社S4〜S6）のうち未登録のものを追加します。登録済みの会社・契約は変更・削除しません', on: { click: () => guard(async () => {
-      if (!(await ask({ title: 'テスト物件を追加しますか？', message: 'パターンを網羅したテスト物件（会社 S4〜S6、契約 K-008〜K-051）のうち、まだ登録されていないものだけを追加します。登録済みの会社・契約は変更・削除しません（同じ番号のものは追加しません）。', okLabel: '追加する' }))) return;
+    h('button', { class: 'btn', type: 'button', title: '帳票・速度の確認用に、パターンを網羅したテスト物件（K-008〜K-052・子会社S4〜S6・注記の収集値）のうち未登録のものを追加します。登録済みの会社・契約は変更・削除しません', on: { click: () => guard(async () => {
+      if (!(await ask({ title: 'テスト物件を追加しますか？', message: 'パターンを網羅したテスト物件（会社 S4〜S6、契約 K-008〜K-052）のうち、まだ登録されていないものだけを追加します。登録済みの会社・契約は変更・削除しません（同じ番号のものは追加しません）。', okLabel: '追加する' }))) return;
       const r = addTestData();
       toast(r.contracts.length || r.companies.length ? `会社 ${r.companies.length}社・契約 ${r.contracts.length}件を追加しました${r.skipped.length ? `（登録済みの ${r.skipped.length}件は追加していません）` : ''}` : 'テスト物件はすべて登録済みです');
     }) } }, 'テスト物件を追加（未登録分）'),
@@ -76,7 +87,7 @@ export function renderContracts(ctx) {
     h('span', { class: 'spacer' }), filter, count);
 
   return h('div', { class: 'page' },
-    card('契約一覧', h('div', { class: 'alert alert-info' }, '契約は1件ずつ追加するほか、CSVでまとめて取り込めます。「取込用テンプレート」の列（貸手・借手は別々の列）に入力して取り込んでください。既存と同じ契約番号の行は上書きします（条件変更・実績の入力は引き継ぎます）。'), actions, listBox),
+    card('契約一覧', h('div', { class: 'alert alert-info' }, '契約は1件ずつ追加するほか、CSVでまとめて取り込めます。「取込用テンプレート」の列（貸手・借手は別々の列）に入力して取り込んでください。既存と同じ契約番号の行は上書きします（条件変更・実績の入力は引き継ぎます）。'), actions, filters, listBox),
     sel ? editor(sel, data) : card(null, emptyState('一覧から契約を選ぶと、ここに編集画面を表示します。')),
     sel ? renderDetail(sel, ctx) : null,
     companyCard(ctx),
@@ -424,6 +435,9 @@ function reportCard(c, sc, ctx) {
 
 // 行を強調するイベントか（適用開始前の支払は毎月続くため、それだけの月は強調しない）
 const isKeyEvent = (ev) => !!ev && ev.split('・').some((e) => !e.endsWith('適用開始前の支払'));
+
+// 契約一覧の絞り込み（文字・貸手・借手・会計モデル）。画面を移っても保つ
+const listView = { q: '', lessor: '', lessee: '', model: '' };
 
 // 会社別の集計の表示（会社・単位）
 const coRep = { co: null, unit: 'year' };

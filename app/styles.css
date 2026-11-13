@@ -415,3 +415,10 @@ label { max-width: 100%; }
 body:has(.save-bar) .to-top { bottom: 84px; }
 @media (max-width: 760px) { body:has(.save-bar) .to-top { bottom: 120px; } .to-top { right: 8px; bottom: 8px; } }
 @media (max-width: 760px) { .page .card, .note-sec, [data-nav] { scroll-margin-top: 64px; } }
+/* 横断検索 */
+.gsearch { position: relative; flex: 1 1 260px; max-width: 420px; margin: 0 12px; }
+.gsearch-input { width: 100%; }
+.gsearch-list { position: absolute; top: 100%; left: 0; right: 0; z-index: 60; list-style: none; margin: 4px 0 0; padding: 4px; background: var(--surface); border: 1px solid var(--line-2); border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.15); max-height: 60vh; overflow-y: auto; }
+.gsearch-list li { padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.gsearch-list li.on, .gsearch-list li:hover { background: var(--soft-2); }
+@media (max-width: 760px) { .gsearch { order: 3; flex-basis: 100%; max-width: none; margin: 4px 0 0; } }
