@@ -357,7 +357,8 @@ function render() {
   }
   clear(root).append(header(ctx), h('div', { class: 'layout' }, nav, main, panel), h('button', { class: 'btn to-top', type: 'button', title: '画面の先頭へ', 'aria-label': '画面の先頭へ', on: { click: () => window.scrollTo({ top: 0, behavior: 'smooth' }) } }, '▲ 先頭へ'));
   render.secs = secs.map((x) => x.id);
-  updateSpy();
+  // 現在地の強調は描画の後に行う（直後に位置を測ると、画面全体の配置の計算を待つことになり遷移が遅くなるため）
+  requestAnimationFrame(() => setTimeout(updateSpy, 50));
   mountPanel(panel);
   if (render.lastPage === page.id) window.scrollTo(0, scrollY);
   render.lastPage = page.id;
