@@ -163,9 +163,9 @@ function pageSections(main) {
 function subItems(p, ctx, main) {
   const { data, checks, pol } = ctx;
   if (p.id === 'policies') return POLICIES.map((d) => ({ label: `${d.id} ${d.title}${pol[d.id] !== d.default ? '（変更）' : ''}`, go: () => flashTo(d.id) }));
-  if (p.id === 'checks') return [...pageSections(main).map((x) => ({ label: x.label, go: () => flashTo(x.id) })), ...checks.filter((c) => c.status !== 'ok').map((c) => ({ label: `${c.status === 'ng' ? '✕' : '!'} ${c.id} ${c.title.replace(/（.*$/, '')}`, go: () => flashTo(c.id) }))];
+  if (p.id === 'checks') return [...pageSections(main).map((x) => ({ id: x.id, label: x.label, go: () => flashTo(x.id) })), ...checks.filter((c) => c.status !== 'ok').map((c) => ({ label: `${c.status === 'ng' ? '✕' : '!'} ${c.id} ${c.title.replace(/（.*$/, '')}`, go: () => flashTo(c.id) }))];
   // その他の画面：画面内の見出し付きのカード・表へ移動する（契約・会社が多く縦に長くなるため）
-  return pageSections(main).map((x) => ({ label: x.label, go: () => flashTo(x.id) }));
+  return pageSections(main).map((x) => ({ id: x.id, label: x.label, go: () => flashTo(x.id) }));
 }
 
 function sidebar(page, ctx, main) {
@@ -179,7 +179,7 @@ function sidebar(page, ctx, main) {
         stt ? h('span', { class: `nav-st ${stt.cls}`, title: stt.cls === 'ok' ? '入力済み' : stt.cls === 'warn' ? '確認事項の件数' : '未入力' }, stt.text) : null));
     const subs = on ? subItems(p, ctx, main) : [];
     if (subs.length && on) {
-      li.append(h('div', { class: 'nav-sub-cap small muted' }, 'この画面内の移動'), h('ul', { class: 'nav-sub' }, subs.map((x) => h('li', null, h('a', { href: `#${p.id}`, class: x.on ? 'on' : '', 'aria-current': x.on ? 'true' : null, on: { click: (e) => {
+      li.append(h('div', { class: 'nav-sub-cap small muted' }, 'この画面内の移動'), h('ul', { class: 'nav-sub' }, subs.map((x) => h('li', null, h('a', { href: `#${p.id}`, class: x.on ? 'on' : '', 'data-target': x.id || null, 'aria-current': x.on ? 'true' : null, on: { click: (e) => {
         e.preventDefault();
         // スマホではメニューを閉じてから移動する
         if (state.ui.menuOpen) { state.ui.menuOpen = false; document.getElementById('sidebar')?.classList.remove('open'); }
@@ -289,11 +289,38 @@ function render() {
   }
   const panel = h('aside', { class: 'panel', id: 'calc-panel', 'aria-label': '計算の確認' });
   const scrollY = window.scrollY;
-  clear(root).append(header(), h('div', { class: 'layout' }, sidebar(page, ctx, main), main, panel));
+  const nav = sidebar(page, ctx, main);
+  // 画面内の移動（スマホではメニューを開かずに使えるよう、画面の上部にプルダウンでも表示する）
+  const secs = pageSections(main);
+  if (secs.length > 1) {
+    const sel = h('select', { class: 'page-jump-select', 'aria-label': 'この画面内の移動', on: { change: (e) => { if (e.target.value) flashTo(e.target.value); } } },
+      h('option', { value: '' }, `この画面内の移動（${secs.length}か所）`), ...secs.map((x) => h('option', { value: x.id }, x.label)));
+    main.querySelector('.step-title')?.after(h('div', { class: 'page-jump' }, sel));
+  }
+  clear(root).append(header(), h('div', { class: 'layout' }, nav, main, panel), h('button', { class: 'btn to-top', type: 'button', title: '画面の先頭へ', 'aria-label': '画面の先頭へ', on: { click: () => window.scrollTo({ top: 0, behavior: 'smooth' }) } }, '▲ 先頭へ'));
+  render.secs = secs.map((x) => x.id);
+  updateSpy();
   mountPanel(panel);
   if (render.lastPage === page.id) window.scrollTo(0, scrollY);
   render.lastPage = page.id;
 }
+
+/** 現在地の強調：画面の上端を過ぎた最後の見出しを「この画面内の移動」で強調し、先頭へ戻るボタンを出し入れする */
+function updateSpy() {
+  const top = document.querySelector('.to-top');
+  if (top) top.classList.toggle('show', window.scrollY > 600);
+  const ids = render.secs || [];
+  let cur = null;
+  for (const id of ids) {
+    const el = document.getElementById(id);
+    if (el && el.getBoundingClientRect().top <= 140) cur = id;
+  }
+  for (const a of document.querySelectorAll('.nav-sub a[data-target]')) a.classList.toggle('here', a.dataset.target === cur);
+  const sel = document.querySelector('.page-jump-select');
+  if (sel && sel.value !== (cur || '')) sel.value = cur || '';
+}
+let spyQueued = false;
+window.addEventListener('scroll', () => { if (spyQueued) return; spyQueued = true; requestAnimationFrame(() => { spyQueued = false; updateSpy(); }); }, { passive: true });
 
 init();
 document.documentElement.dataset.palette = state.ui.palette || 'bt';

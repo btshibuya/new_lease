@@ -404,3 +404,14 @@ label { max-width: 100%; }
 .nav-sub-cap { margin: 6px 0 2px 34px; font-size: 11px; }
 /* 画面内の移動で、移動先の見出しが画面の上端に隠れないように */
 .page .card, .note-sec, [data-nav] { scroll-margin-top: 12px; }
+/* 画面内の移動：現在地の強調、スマホ用のプルダウン、先頭へ戻るボタン */
+.nav-sub a.here { color: var(--navy); font-weight: 700; }
+.nav-sub a.here .nav-dot { background: var(--accent, var(--navy-2)); }
+.page-jump { display: none; margin: 0 0 10px; }
+.page-jump-select { width: 100%; max-width: 100%; }
+@media (max-width: 760px) { .page-jump { display: block; position: sticky; top: 0; z-index: 20; background: var(--bg); padding: 6px 0; } }
+.to-top { position: fixed; right: 16px; bottom: 16px; z-index: 40; display: none; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+.to-top.show { display: inline-flex; }
+body:has(.save-bar) .to-top { bottom: 84px; }
+@media (max-width: 760px) { body:has(.save-bar) .to-top { bottom: 120px; } .to-top { right: 8px; bottom: 8px; } }
+@media (max-width: 760px) { .page .card, .note-sec, [data-nav] { scroll-margin-top: 64px; } }
