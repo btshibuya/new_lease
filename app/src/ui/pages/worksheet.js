@@ -509,6 +509,7 @@ function renderNotes(ctx) {
         { label: '記入が必要な項目（グループ内リース分のある行）', render: (x) => h('td', { class: 'num', title: x.missing.length ? `未記入：${x.missing.map(label).join('、')}` : '' }, x.req ? `${x.reqFilled}／${x.req}` : '－') },
         { label: '未記入の必要な項目', render: (x) => h('td', { class: 'small', title: x.filled && x.missing.length > 5 ? x.missing.map(label).join('、') : '' }, x.filled && x.missing.length ? `${x.missing.slice(0, 5).map(label).join('、')}${x.missing.length > 5 ? ` ほか${x.missing.length - 5}項目` : ''}` : '') },
         { label: '記入済みの項目（全体）', render: (x) => h('td', { class: 'num' }, `${x.filled}／${nRows}`) },
+        { label: '収集用Excel', render: (x) => h('td', null, h('button', { class: 'btn btn-sm', type: 'button', title: `${x.code} に配る収集用 Excel（記入済みの値を含む）を書き出します`, on: { click: () => saveFile(`注記の収集表_${period.label}_${x.code}.xlsx`, noteCollectionXlsx(companies.filter((c) => c.code === x.code), period, g, inputs), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') } }, '書き出す')) },
       ], st, { className: 'compact' }));
   };
   return card('注記（新リース会計基準）',

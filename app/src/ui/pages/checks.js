@@ -1,4 +1,5 @@
-import { h, card, statusBadge, table, toast, ask } from '../dom.js';
+import { h, card, statusBadge, table, toast, ask, download } from '../dom.js';
+import { toCsv } from '../../engine/data.js';
 import { kpi } from '../components.js';
 import { state, update, lockPeriod, unlockPeriod, isLocked } from '../store.js';
 import { snapshotNets } from '../../engine/checks.js';
@@ -38,6 +39,14 @@ export function renderChecks(ctx) {
       h('button', { class: 'btn', type: 'button', on: { click: () => update((d) => { d.checkNotes = { ...(d.checkNotes || {}), [id]: ta.value.trim().slice(0, 2000) }; if (!d.checkNotes[id]) delete d.checkNotes[id]; }, '判断の記録', `${id}：${ta.value.trim().slice(0, 100)}`) } }, '記録する'));
   };
 
+  // 行の判定（明細の表示と書き出しで共通）
+  const rowSt = (c, r) => (r.ok ? 'ok' : r.warn ? 'warn' : c.status === 'ok' ? 'ok' : c.status);
+  const ST = { ok: 'OK', warn: '確認', ng: 'NG' };
+  // 検算結果の書き出し（監査の証跡用）：検算ごとの判定・検証方法・内容と、明細の行
+  const exportChecks = () => download(`検算結果_${period.label}.csv`, toCsv([
+    ['期間', '検算ID', '検算', '判定', '検証方法', '内容', '明細の判定', '契約', '会社', '明細'],
+    ...checks.flatMap((c) => (c.rows.length ? c.rows : [null]).map((r) => [period.label, c.id, c.title, ST[c.status] || c.status, c.independence || '', c.detail, r ? ST[rowSt(c, r)] : '', r?.contract || '', r?.company || '', r?.message || ''])),
+  ]), 'text/csv;charset=utf-8');
   return h('div', { class: 'page' },
     h('div', { class: 'kpi' },
       kpi('OK', `${n('ok')} 項目`, null, { accent: 'good' }),
@@ -45,13 +54,19 @@ export function renderChecks(ctx) {
       kpi('NG', `${n('ng')} 項目`, 'NGが残る期間は確定できません', { accent: 'crit' })),
     card(null, h('div', { class: 'alert alert-info' }, '各検算の「検証方法」は、その検算が仕訳の作成とどの程度独立しているかを示します。「別経路で計算」「別実装で再計算」「公式による再計算」は、仕訳とは異なる計算で期待値を作って比較するものです。自動テストでは、意図的に入れた28種類の誤り（税効果・非支配株主持分・償却・利息・条件変更・遡及測定・CF など）をすべて検出することを確認していますが、すべての誤りを検出できるわけではありません。特に、契約条件そのものの入力誤りや、借手・貸手の帳簿との差は「外部との突合」（CHK-10）でしか検出できません。「外部との突合」は個別帳簿の実績が入力されている場合のみ有効です。')),
     lockBox,
+    h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', title: '検算ごとの判定・検証方法・内容と明細の行を CSV に書き出します（監査の証跡用）', on: { click: exportChecks } }, '検算結果を書き出す（CSV）'),
+      h('label', { class: 'small' }, h('input', { type: 'checkbox', checked: !!checkView.issuesOnly, on: { change: (e) => { checkView.issuesOnly = e.target.checked; window.dispatchEvent(new HashChangeEvent('hashchange')); } } }), ' 明細は NG・確認の行だけ表示')),
     ...checks.map((c) => h('section', { class: `card check st-border-${c.status}`, id: c.id },
       h('header', { class: 'check-head' }, statusBadge(c.status), h('h2', null, `${c.id} ${c.title}`), c.independence ? h('span', { class: 'badge' }, `検証方法：${c.independence}`) : null),
       h('p', null, c.detail),
       c.id === 'CHK-12' && c.rows.length ? noteInput('CHK-12') : null,
-      c.rows.length ? h('details', { open: c.status === 'ng' }, h('summary', null, `明細（${c.rows.length}件）`),
-        table([{ label: '判定', render: (r) => h('td', null, r.ok ? statusBadge('ok') : r.warn ? statusBadge('warn') : c.status === 'ok' ? statusBadge('ok') : statusBadge(c.status)) }, { label: '契約', render: (r) => (r.contract || !r.company ? contractCell(r.contract, ctx) : companyCell(r.company, ctx)) }, { label: '内容', key: 'message' }], c.rows, { className: 'compact' })) : null)));
+      c.rows.length ? h('details', { open: c.status === 'ng' }, h('summary', null, `明細（${c.rows.length}件${(() => { const k = c.rows.filter((r) => rowSt(c, r) !== 'ok').length; return k && k < c.rows.length ? `、うち NG・確認 ${k}件` : ''; })()}）`),
+        table([{ label: '判定', render: (r) => h('td', null, r.ok ? statusBadge('ok') : r.warn ? statusBadge('warn') : c.status === 'ok' ? statusBadge('ok') : statusBadge(c.status)) }, { label: '契約', render: (r) => (r.contract || !r.company ? contractCell(r.contract, ctx) : companyCell(r.company, ctx)) }, { label: '内容', key: 'message' }], checkView.issuesOnly ? c.rows.filter((r) => rowSt(c, r) !== 'ok') : c.rows, { className: 'compact' }),
+        checkView.issuesOnly && !c.rows.some((r) => rowSt(c, r) !== 'ok') ? h('p', { class: 'muted small' }, `NG・確認の行はありません（OK の行 ${c.rows.length}件は「明細は NG・確認の行だけ表示」を外すと表示します）`) : null) : null)));
 }
+
+// 検算の明細の表示（NG・確認の行だけにするか）。画面を移っても保つ
+const checkView = { issuesOnly: false };
 
 /** 検算の明細の会社コードから、会社マスタ（持分比率の推移）へ */
 function companyCell(code, ctx) {
